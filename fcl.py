@@ -20,6 +20,25 @@ def read_data():
 
     return data
 
+color_count = 4
+def init_colors():
+    global color_count
+    if curses.COLORS >= 256:
+        curses.init_pair(1, curses.COLOR_BLACK, 214)
+        curses.init_pair(2, curses.COLOR_BLACK, 202)
+        curses.init_pair(3, curses.COLOR_BLACK, 208)
+        curses.init_pair(4, curses.COLOR_BLACK, 196)
+        curses.init_pair(5, curses.COLOR_BLACK, 166)
+        curses.init_pair(6, curses.COLOR_BLACK, 172)
+        curses.init_pair(7, curses.COLOR_BLACK, 178)
+        color_count = 7
+    elif curses.COLORS >= 16:
+        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_RED)
+        curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_GREEN)
+        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_BLUE)
+        color_count = 4
+
 # Frame represents stack frame itself, not the 'view'
 class Frame:
     def __init__(self, title, samples, children):
@@ -49,7 +68,7 @@ class MultiFrameView:
         else:
             txt = "[{}]".format("*" * (self.w - 2))
 
-        style = curses.color_pair(randint(1, 4))
+        style = curses.color_pair(randint(1, color_count))
         if highlight:
             style = style | curses.A_REVERSE
 
@@ -82,7 +101,8 @@ class FrameView:
             txt = "#"
         else:
             txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
-        style = curses.color_pair(randint(1, 4))
+        # TODO: better color picking
+        style = curses.color_pair(randint(1, color_count))
         if highlight:
             style = style | curses.A_REVERSE
         scr.addstr(self.y, self.x, txt, style)
@@ -128,7 +148,7 @@ class FrameSet:
             res.append(frame)
         return res
 
-    # this is recursive routine to prepare views from all frames 
+    # this is recursive routine to prepare views.
     # frames would be a 'top level'
     def _get_views_rec(self, frames, width, s = 0, x = 0, y = 0):
         if s == 0:
@@ -157,11 +177,10 @@ class FrameSet:
             res.append(FrameView(x, y, 1, leftovers[0]))
         return res
 
-    # this function prepares blocks from a subset of frame set,
-    # optionally focusing on a specific frame. 
+    # This method prepares blocks from a subset of frame set,
+    # optionally focusing on a specific frame view.
     # All descendants of that frame will be shown,
     # as well as path to the root.
-    # focus frames are going to be from the same path
     def get_frame_views(self, width, focus = None):
         root_path = []
         if focus:
@@ -179,19 +198,6 @@ class FrameSet:
         res.sort(key = attrgetter("y", "x"))
 
         return res
-
-class Colors:
-    def __init__(self):
-        if curses.COLORS >= 256:
-            curses.init_pair(1, curses.COLOR_BLACK, 214)
-            curses.init_pair(2, curses.COLOR_BLACK, 202)
-            curses.init_pair(3, curses.COLOR_BLACK, 208)
-            curses.init_pair(4, curses.COLOR_BLACK, 196)
-        elif curses.COLORS >= 16:
-            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_RED)
-            curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-            curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_GREEN)
-            curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_BLUE)
 
 class StatusArea:
     def __init__(self, stdscr):
@@ -213,11 +219,11 @@ class FlameCLI:
         curses.curs_set(0)
         curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
         stdscr.clear()
+        init_colors()
+
         data = read_data()
         self.frames = FrameSet(data)
         self.total_samples = sum([a for (_, a) in data])
-
-        self.colors = Colors()
 
         self.frame_views = self.frames.get_frame_views(curses.COLS)
         self.build_screen_index()
@@ -306,16 +312,16 @@ class FlameCLI:
     def loop(self):
         while True:
             c = self.stdscr.getch()
-            if c == ord('N') or c == curses.KEY_LEFT:
+            if c == ord('h') or c == curses.KEY_LEFT:
                 self.move_selection(-1)
                 continue
-            if c == ord('n') or c == curses.KEY_RIGHT:
+            if c == ord('l') or c == curses.KEY_RIGHT:
                 self.move_selection(1)
                 continue
-            if c == curses.KEY_UP:
+            if c == ord('k') or c == curses.KEY_UP:
                 self.select_up()
                 continue
-            if c == curses.KEY_DOWN:
+            if c == ord('j') or c == curses.KEY_DOWN:
                 self.select_down()
                 continue
             if c == ord('r'):
@@ -323,7 +329,6 @@ class FlameCLI:
                 self.pall()
                 continue
             if c == ord('f'):
-                # f -- focus
                 self.build_views_focused()
                 self.pall()
                 continue
