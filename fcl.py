@@ -7,7 +7,7 @@ from operator import attrgetter
 from random import randint
 
 def read_data():
-    # one weird trick to read both piped stdin and use tty in curses
+    # to read both piped stdin and use tty in curses
     os.dup2(0, 3)
     os.close(0)
     sys.stdin = open('/dev/tty', 'r')
@@ -45,18 +45,20 @@ class MultiFrameView:
         if self.w == 0:
             return
         if self.w == 1:
-            txt = "v"
+            txt = "*"
         else:
-            txt = "[{}]".format("v" * (self.w - 2))
+            txt = "[{}]".format("*" * (self.w - 2))
 
         style = curses.color_pair(randint(1, 4))
         if highlight:
             style = style | curses.A_REVERSE
 
         scr.addstr(self.y, self.x, txt, style)
-            
+    
+    # this needs to return a list of 'statuses'
     def status(self, total):
-        return "Combined {} ({} samples, {:.2f}%)".format(len(self.frames), self.samples, 100.0 * self.samples / total)
+        s = ["{} ({} samples, {:.2f}%)".format(f.title, f.samples, 100.0 * f.samples / total) for f in self.frames]
+        return ["Total: {} samples, {:.2f}%".format(self.samples, 100.0 * self.samples / total)] + s
 
     def matches(self, frames):
         return False
@@ -86,7 +88,7 @@ class FrameView:
         scr.addstr(self.y, self.x, txt, style)
 
     def status(self, total):
-        return "{} ({} samples, {:.2f}%)".format(self.frame.title, self.frame.samples, 100.0 * self.frame.samples / total)
+        return ["{} ({} samples, {:.2f}%)".format(self.frame.title, self.frame.samples, 100.0 * self.frame.samples / total)]
 
     def matches(self, frames):
         return self.frame in frames
@@ -147,10 +149,12 @@ class FrameSet:
         # for now just append as a single frame view
         # this will work bad if ALL frames are small in current view
         # in this case, we'll never be able to dive into it
-        if len(leftovers) > 0:
+        if len(leftovers) > 1:
             samples = sum([f.samples for f in leftovers])
             w = max(1, int(floor(1.0 * width * samples / s)))
             res.append(MultiFrameView(x, y, w, leftovers))
+        elif len(leftovers) == 1:
+            res.append(FrameView(x, y, 1, leftovers[0]))
         return res
 
     # this function prepares blocks from a subset of frame set,
@@ -173,6 +177,7 @@ class FrameSet:
         samples = sum([f.samples for f in focus])
         res = res + self._get_views_rec(focus, width, samples, 0, len(res)) 
         res.sort(key = attrgetter("y", "x"))
+
         return res
 
 class Colors:
@@ -188,6 +193,20 @@ class Colors:
             curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_GREEN)
             curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_BLUE)
 
+class StatusArea:
+    def __init__(self, stdscr):
+        self.scr = stdscr
+        self.old_lines = 0
+
+    def draw(self, lines):
+        if len(lines) < self.old_lines:
+            for i in range(self.old_lines):
+                self.scr.addstr(curses.LINES - 1 - i, 0, " " * (curses.COLS - 1))
+        for (i, l) in enumerate(lines):
+            self.scr.addstr(curses.LINES - 1 - i, 0, l.ljust(curses.COLS - 1))
+        self.old_lines = len(lines)
+
+
 class FlameCLI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -201,10 +220,12 @@ class FlameCLI:
         self.colors = Colors()
 
         self.frame_views = self.frames.get_frame_views(curses.COLS)
+        self.build_screen_index()
+        self.status_area = StatusArea(self.stdscr)
         self.selection = 0
 
     # rebuilding all blocks, while keeping selection
-    def rebuild_blocks(self):
+    def rebuild_views(self):
         selected_frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(curses.COLS)
         self.selection = 0
@@ -212,8 +233,9 @@ class FlameCLI:
             if view.matches(selected_frames):
                 self.selection = i
                 break
+        self.build_screen_index()
 
-    def build_blocks_focused(self):
+    def build_views_focused(self):
         frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(curses.COLS, frames)
         self.selection = 0
@@ -221,15 +243,37 @@ class FlameCLI:
             if view.matches(frames):
                 self.selection = i
                 break
+        self.build_screen_index()
+
+    # index of 'coords' -> view
+    def build_screen_index(self):
+        self.screen_index = [[] for _ in range(curses.LINES)]
+        for (i, v) in enumerate(self.frame_views):
+            self.screen_index[v.y].append((v.x, v.x + v.w, i))
+        self.assign_parents()
+
+    def lookup_view_index(self, x, y):
+        if y >= 0 and y < len(self.screen_index):
+            for (a, b, vi) in self.screen_index[y]:
+                if x >= a and x < b:
+                    self.ppp(vi)
+                    return vi
+        return None
+
+    # TODO better way would be to use frame hierarchy rather than view hierarchy
+    def assign_parents(self):
+        for v in self.frame_views:
+            v.parent_index = self.lookup_view_index(v.x, v.y - 1)
+            v.first_child_index = self.lookup_view_index(v.x, v.y + 1)
 
     # output status line
     def print_status_bar(self):
         status = self.frame_views[self.selection].status(self.total_samples)
-        self.stdscr.addstr(curses.LINES - 1, 0, status.ljust(100))
+        self.status_area.draw(status)
 
     # output debug line
     def ppp(self, s):
-        self.stdscr.addstr(curses.LINES - 2, 0, "{}".format(s).ljust(100))
+        self.stdscr.addstr(curses.LINES - 2, 0, "{}".format(s).ljust(curses.COLS))
 
     def pall(self): 
         self.stdscr.clear()
@@ -238,34 +282,49 @@ class FlameCLI:
         self.print_status_bar()
 
     def change_selection(self, s):
+        if s is None:
+            return False
         self.frame_views[self.selection].draw(self.stdscr, False)
         self.selection = s
         self.frame_views[self.selection].draw(self.stdscr, True)
         self.print_status_bar()
+        return True
 
     def move_selection(self, d):
         m = len(self.frame_views)
-        self.change_selection(((self.selection + d) % m + m) % m)
+        if self.change_selection(((self.selection + d) % m + m) % m):
+            self.stdscr.refresh()
+
+    def select_up(self):
+        if self.change_selection(self.frame_views[self.selection].parent_index):
+            self.stdscr.refresh()
+
+    def select_down(self):
+        if self.change_selection(self.frame_views[self.selection].first_child_index):
+            self.stdscr.refresh()
 
     def loop(self):
         while True:
             c = self.stdscr.getch()
-            if c == ord('N'):
+            if c == ord('N') or c == curses.KEY_LEFT:
                 self.move_selection(-1)
-                self.stdscr.refresh()
                 continue
-            if c == ord('n'):
-                self.ppp(curses.COLORS)
+            if c == ord('n') or c == curses.KEY_RIGHT:
                 self.move_selection(1)
-                self.stdscr.refresh()
+                continue
+            if c == curses.KEY_UP:
+                self.select_up()
+                continue
+            if c == curses.KEY_DOWN:
+                self.select_down()
                 continue
             if c == ord('r'):
-                self.rebuild_blocks()
+                self.rebuild_views()
                 self.pall()
                 continue
             if c == ord('f'):
                 # f -- focus
-                self.build_blocks_focused()
+                self.build_views_focused()
                 self.pall()
                 continue
             if c == ord('q'):
@@ -274,18 +333,18 @@ class FlameCLI:
                 (_, mx, my, _, m) = curses.getmouse()
                 # just iterate linearly; we don't expect millions of blocks here
                 if m & curses.BUTTON1_CLICKED:
-                    for (i, view) in enumerate(self.frame_views):
-                        if view_contains(view, mx, my):
-                            self.change_selection(i)
-                            self.stdscr.refresh()
-                            break
+                    i = self.lookup_view_index(mx, my)
+                    if i is not None:
+                        self.change_selection(i)
+                        self.stdscr.refresh()
+                        continue
                 if m & curses.BUTTON1_DOUBLE_CLICKED:
-                    for (i, view) in enumerate(self.frame_views):
-                        if view_contains(view, mx, my):
-                            self.change_selection(i)
-                            self.build_blocks_focused()
-                            self.pall()
-                            break
+                    i = self.lookup_view_index(mx, my)
+                    if i is not None:
+                        self.change_selection(i)
+                        self.build_views_focused()
+                        self.pall()
+                        continue
 
 def main(stdscr):
     h = FlameCLI(stdscr)
