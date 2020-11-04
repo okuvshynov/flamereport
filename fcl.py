@@ -9,9 +9,8 @@ from random import randint
 ####
 # next things to do:
 # -- inverted view
-# -- focus and bring up
 # -- consolidate visual representation
-# -- handle window resize
+# -- indicate truncated frames (above and below)
 
 # reading stacks from stdin
 def read_data():
@@ -203,12 +202,15 @@ class FrameSet:
     # optionally focusing on a specific frame view.
     # All descendants of that frame will be shown,
     # as well as path to the root.
-    def get_frame_views(self, width, focus = None):
+    def get_frame_views(self, width, focus = None, pin = None):
         root_path = []
-        if focus:
+        
+        if focus and focus[0] not in pin:
             frame = focus[0].parent
             while frame is not None:
                 root_path.insert(0, frame)
+                if frame in pin:
+                    break
                 frame = frame.parent
 
         if focus is None:
@@ -227,12 +229,13 @@ class StatusArea:
         self.old_lines = 0
 
     def draw(self, lines):
+        rows, cols = self.scr.getmaxyx()
         if len(lines) < self.old_lines:
             for i in range(self.old_lines):
-                self.scr.addstr(curses.LINES - 1 - i, 0, " " * (curses.COLS - 1))
-        y = curses.LINES - len(lines)
+                self.scr.addstr(rows - 1 - i, 0, " " * (cols - 1))
+        y = rows - len(lines)
         for (i, l) in enumerate(lines):
-            self.scr.addstr(y + i, 0, l.ljust(curses.COLS - 1))
+            self.scr.addstr(y + i, 0, l.ljust(cols - 1))
         self.old_lines = len(lines)
 
 
@@ -248,16 +251,22 @@ class FlameCLI:
         self.frames = FrameSet(data)
         self.total_samples = sum([a for (_, a) in data])
 
-        self.frame_views = self.frames.get_frame_views(curses.COLS)
+        self.frame_views = self.frames.get_frame_views(stdscr.getmaxyx()[1])
         self.fit_into_vertical_space()
         self.build_screen_index()
         self.status_area = StatusArea(self.stdscr)
+        # index of selected frame view
         self.selection = 0
+        # focus on frameset means 'expand it to 100% width'
+        self.focus = None
+        self.pinned = None
+        self.render()
+    
 
     # rebuilding all blocks, while keeping selection
     def rebuild_views(self):
         selected_frames = self.frame_views[self.selection].frameset()
-        self.frame_views = self.frames.get_frame_views(curses.COLS)
+        self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1], self.focus, self.pinned)
         self.fit_into_vertical_space()
         self.selection = 0
         for (i, view) in enumerate(self.frame_views):
@@ -266,20 +275,26 @@ class FlameCLI:
                 break
         self.build_screen_index()
 
-    def build_views_focused(self):
-        frames = self.frame_views[self.selection].frameset()
-        self.frame_views = self.frames.get_frame_views(curses.COLS, frames)
-        self.fit_into_vertical_space()
-        self.selection = 0
-        for (i, view) in enumerate(self.frame_views):
-            if view.matches(frames):
-                self.selection = i
-                break
-        self.build_screen_index()
+    def reset_focus(self):
+        self.focus = None
+        self.pinned = None
+        self.rebuild_views()
+        self.render()
+
+    def set_focus(self):
+        self.focus = self.frame_views[self.selection].frameset()
+        self.rebuild_views()
+        self.render()
+
+    def set_pin(self):
+        self.focus = self.frame_views[self.selection].frameset()
+        self.pinned = self.focus
+        self.rebuild_views()
+        self.render()
 
     # index of 'coords' -> view
     def build_screen_index(self):
-        self.screen_index = [[] for _ in range(curses.LINES)]
+        self.screen_index = [[] for _ in range(self.stdscr.getmaxyx()[0])]
         for (i, v) in enumerate(self.frame_views):
             self.screen_index[v.y].append((v.x, v.x + v.w, i))
         self.assign_parents()
@@ -297,16 +312,17 @@ class FlameCLI:
             v.parent_index = self.lookup_view_index(v.x, v.y - 1)
             v.first_child_index = self.lookup_view_index(v.x, v.y + 1)
 
-    # output status line
+    # output summary area
     def print_status_bar(self):
         status = self.frame_views[self.selection].status(self.total_samples, self.status_height)
         self.status_area.draw(status)
 
     # output debug line
     def ppp(self, s):
-        self.stdscr.addstr(curses.LINES - 2, 0, "{}".format(s).ljust(curses.COLS))
+        rows, cols = self.stdscr.getmaxyx()
+        self.stdscr.addstr(rows - 2, 0, "{}".format(s).ljust(cols))
 
-    def pall(self): 
+    def render(self): 
         self.stdscr.clear()
         for (i, _) in enumerate(self.frame_views):
             self.frame_views[i].draw(self.stdscr, i == self.selection)
@@ -336,7 +352,7 @@ class FlameCLI:
 
     # returns a tuple (characters for chart, characters for status)
     def allocate_vertical_space(self, frame_views):
-        height = curses.LINES
+        height = self.stdscr.getmaxyx()[0]
         if height <= 0:
             return (0, 0)
         if height == 1:
@@ -379,12 +395,13 @@ class FlameCLI:
                 self.select_down()
                 continue
             if c == ord('r'):
-                self.rebuild_views()
-                self.pall()
+                self.reset_focus()
                 continue
             if c == ord('f'):
-                self.build_views_focused()
-                self.pall()
+                self.set_focus()
+                continue
+            if c == ord('p'):
+                self.set_pin()
                 continue
             if c == ord('q'):
                 break
@@ -400,13 +417,14 @@ class FlameCLI:
                     i = self.lookup_view_index(mx, my)
                     if i is not None:
                         self.change_selection(i)
-                        self.build_views_focused()
-                        self.pall()
+                        self.set_focus()
                         continue
+            if c == curses.KEY_RESIZE:
+                self.rebuild_views()
+                self.render()
 
 def main(stdscr):
     h = FlameCLI(stdscr)
-    h.pall()
     h.loop()
 
 wrapper(main)
