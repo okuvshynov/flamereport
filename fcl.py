@@ -6,6 +6,14 @@ from math import floor
 from operator import attrgetter
 from random import randint
 
+####
+# next things to do:
+# -- inverted view
+# -- focus and bring up
+# -- consolidate visual representation
+# -- handle window resize
+
+# reading stacks from stdin
 def read_data():
     # to read both piped stdin and use tty in curses
     os.dup2(0, 3)
@@ -20,24 +28,24 @@ def read_data():
 
     return data
 
-color_count = 4
+# color initialization
+color_count = 0
 def init_colors():
     global color_count
+    # monochrome, 16 colors, 256 colors modes
+    colors = []
     if curses.COLORS >= 256:
-        curses.init_pair(1, curses.COLOR_BLACK, 214)
-        curses.init_pair(2, curses.COLOR_BLACK, 202)
-        curses.init_pair(3, curses.COLOR_BLACK, 208)
-        curses.init_pair(4, curses.COLOR_BLACK, 196)
-        curses.init_pair(5, curses.COLOR_BLACK, 166)
-        curses.init_pair(6, curses.COLOR_BLACK, 172)
-        curses.init_pair(7, curses.COLOR_BLACK, 178)
-        color_count = 7
+        colors = [214, 202, 208, 196, 166, 172, 178]
     elif curses.COLORS >= 16:
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_RED)
-        curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-        curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_GREEN)
-        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_BLUE)
-        color_count = 4
+        colors = [curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN]
+
+    for (i, c) in enumerate(colors):
+        curses.init_pair(i + 1, curses.COLOR_BLACK, c)
+    color_count = len(colors)
+
+def pick_color():
+    global color_count
+    return randint(1, color_count) if color_count > 1 else 0
 
 # Frame represents stack frame itself, not the 'view'
 class Frame:
@@ -60,24 +68,35 @@ class MultiFrameView:
     def frameset(self):
         return self.frames
 
+    def frame_count(self):
+        return len(self.frames)
+
     def draw(self, scr, highlight):
         if self.w == 0:
             return
         if self.w == 1:
-            txt = "*"
+            txt = "+"
         else:
-            txt = "[{}]".format("*" * (self.w - 2))
+            txt = "[{}]".format("+" * (self.w - 2))
 
-        style = curses.color_pair(randint(1, color_count))
+        style = curses.color_pair(pick_color())
         if highlight:
             style = style | curses.A_REVERSE
 
         scr.addstr(self.y, self.x, txt, style)
     
-    # this needs to return a list of 'statuses'
-    def status(self, total):
-        s = ["{} ({} samples, {:.2f}%)".format(f.title, f.samples, 100.0 * f.samples / total) for f in self.frames]
-        return ["Total: {} samples, {:.2f}%".format(self.samples, 100.0 * self.samples / total)] + s
+    # render summary of the multiframe
+    def status(self, total, height):
+        if height < 1:
+            return []
+        summary = ["Aggregated {} frames (total {} samples, {:.2f}%)".format(self.frame_count(), self.samples, 100.0 * self.samples / total)]
+        if height == 1:
+            return summary
+        s = ["  {} ({} samples, {:.2f}%)".format(f.title, f.samples, 100.0 * f.samples / total) for f in self.frames]
+        if len(s) + 1 <= height:
+            return summary + s
+        fits = height - 2
+        return summary + s[:fits] + ["and {} more".format(len(s) - fits)]
 
     def matches(self, frames):
         return False
@@ -93,6 +112,9 @@ class FrameView:
     def frameset(self):
         return [self.frame]
 
+    def frame_count(self):
+        return 1
+
     def draw(self, scr, highlight):
         # this should never happen?
         if self.w == 0:
@@ -101,13 +123,14 @@ class FrameView:
             txt = "#"
         else:
             txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
-        # TODO: better color picking
-        style = curses.color_pair(randint(1, color_count))
+        style = curses.color_pair(pick_color())
         if highlight:
             style = style | curses.A_REVERSE
         scr.addstr(self.y, self.x, txt, style)
 
-    def status(self, total):
+    def status(self, total, height):
+        if height < 1:
+            return []
         return ["{} ({} samples, {:.2f}%)".format(self.frame.title, self.frame.samples, 100.0 * self.frame.samples / total)]
 
     def matches(self, frames):
@@ -148,8 +171,7 @@ class FrameSet:
             res.append(frame)
         return res
 
-    # this is recursive routine to prepare views.
-    # frames would be a 'top level'
+    # prepare views at current level of granularity and position
     def _get_views_rec(self, frames, width, s = 0, x = 0, y = 0):
         if s == 0:
             s = sum([f.samples for f in frames])
@@ -208,8 +230,9 @@ class StatusArea:
         if len(lines) < self.old_lines:
             for i in range(self.old_lines):
                 self.scr.addstr(curses.LINES - 1 - i, 0, " " * (curses.COLS - 1))
+        y = curses.LINES - len(lines)
         for (i, l) in enumerate(lines):
-            self.scr.addstr(curses.LINES - 1 - i, 0, l.ljust(curses.COLS - 1))
+            self.scr.addstr(y + i, 0, l.ljust(curses.COLS - 1))
         self.old_lines = len(lines)
 
 
@@ -226,6 +249,7 @@ class FlameCLI:
         self.total_samples = sum([a for (_, a) in data])
 
         self.frame_views = self.frames.get_frame_views(curses.COLS)
+        self.fit_into_vertical_space()
         self.build_screen_index()
         self.status_area = StatusArea(self.stdscr)
         self.selection = 0
@@ -234,6 +258,7 @@ class FlameCLI:
     def rebuild_views(self):
         selected_frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(curses.COLS)
+        self.fit_into_vertical_space()
         self.selection = 0
         for (i, view) in enumerate(self.frame_views):
             if view.matches(selected_frames):
@@ -244,6 +269,7 @@ class FlameCLI:
     def build_views_focused(self):
         frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(curses.COLS, frames)
+        self.fit_into_vertical_space()
         self.selection = 0
         for (i, view) in enumerate(self.frame_views):
             if view.matches(frames):
@@ -262,7 +288,6 @@ class FlameCLI:
         if y >= 0 and y < len(self.screen_index):
             for (a, b, vi) in self.screen_index[y]:
                 if x >= a and x < b:
-                    self.ppp(vi)
                     return vi
         return None
 
@@ -274,7 +299,7 @@ class FlameCLI:
 
     # output status line
     def print_status_bar(self):
-        status = self.frame_views[self.selection].status(self.total_samples)
+        status = self.frame_views[self.selection].status(self.total_samples, self.status_height)
         self.status_area.draw(status)
 
     # output debug line
@@ -309,6 +334,35 @@ class FlameCLI:
         if self.change_selection(self.frame_views[self.selection].first_child_index):
             self.stdscr.refresh()
 
+    # returns a tuple (characters for chart, characters for status)
+    def allocate_vertical_space(self, frame_views):
+        height = curses.LINES
+        if height <= 0:
+            return (0, 0)
+        if height == 1:
+            return (1, 0)
+        
+        chart_area_height = 1 + max([v.y for v in frame_views])
+        status_area_height = 1 + max([v.frame_count() for v in frame_views])
+        
+        # if everything fits, we don't need to do anything
+        if chart_area_height + status_area_height <= height:
+            return (chart_area_height, status_area_height)
+        
+        # if it doesn't fit, we'd prefer to fit the main area if we have 
+        # at least one character for status
+        if 1 + chart_area_height <= height:
+            return (chart_area_height, height - chart_area_height)
+
+        # otherwise, allocate 1 line for status, everything else for chart
+        return (height - 1, 1)
+
+    def fit_into_vertical_space(self):
+        (graph, status) = self.allocate_vertical_space(self.frame_views)
+        self.status_height = status
+        self.frame_views = [v for v in self.frame_views if v.y < graph]
+        # TODO: also modify last row if there were stacks below it?
+
     def loop(self):
         while True:
             c = self.stdscr.getch()
@@ -336,7 +390,6 @@ class FlameCLI:
                 break
             if c == curses.KEY_MOUSE:
                 (_, mx, my, _, m) = curses.getmouse()
-                # just iterate linearly; we don't expect millions of blocks here
                 if m & curses.BUTTON1_CLICKED:
                     i = self.lookup_view_index(mx, my)
                     if i is not None:
