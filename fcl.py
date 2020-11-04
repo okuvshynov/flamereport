@@ -204,8 +204,10 @@ class FrameSet:
     # as well as path to the root.
     def get_frame_views(self, width, focus = None, pin = None):
         root_path = []
+        if pin is None:
+            pin = []
         
-        if focus and focus[0] not in pin:
+        if focus and (focus[0] not in pin):
             frame = focus[0].parent
             while frame is not None:
                 root_path.insert(0, frame)
@@ -235,7 +237,7 @@ class StatusArea:
                 self.scr.addstr(rows - 1 - i, 0, " " * (cols - 1))
         y = rows - len(lines)
         for (i, l) in enumerate(lines):
-            self.scr.addstr(y + i, 0, l.ljust(cols - 1))
+            self.scr.addstr(y + i, 0, l.ljust(cols - 1)[:(cols - 1)])
         self.old_lines = len(lines)
 
 
