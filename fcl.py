@@ -125,31 +125,44 @@ class FrameView:
 def view_contains(view, x, y):
     return view.y == y and x >= view.x and x < view.x + view.w
 
+# reading stacks from stdin
+def read_stdin():
+    # to read both piped stdin and use tty in curses
+    os.dup2(0, 3)
+    os.close(0)
+    sys.stdin = open('/dev/tty', 'r')
+
+    data = []
+    with os.fdopen(3, 'r') as stdin_piped:
+        for l in stdin_piped.readlines():
+            (stacks, cnt) = tuple(l.strip().split(' '))
+            data.append((stacks.split(';'), int(cnt))) 
+
+    return data
+
 # set of all frames.
 class FrameSet:
-    def __init__(self):
-        data = self._read_stdin()
+    def __init__(self, data):
         # this is a list of top-level frames
         self.frames = self._build_frames(data)
         self.total_samples = sum([a for (_, a) in data])
         # we are not setting parent to root by design.
         # root is introduced just for convenience and is not visible in UI
         self.root = Frame("root", sum([a for (_, a) in data]), self.frames)
+        self.total_excluded = 0
 
-    # reading stacks from stdin
-    def _read_stdin(self):
-        # to read both piped stdin and use tty in curses
-        os.dup2(0, 3)
-        os.close(0)
-        sys.stdin = open('/dev/tty', 'r')
-
-        data = []
-        with os.fdopen(3, 'r') as stdin_piped:
-            for l in stdin_piped.readlines():
-                (stacks, cnt) = tuple(l.strip().split(' '))
-                data.append((stacks.split(';'), int(cnt))) 
-
-        return data
+    def exclude_frame(self, frame):
+        # on top level
+        if frame in self.frames:
+            self.frames.remove(frame)
+        if frame.parent != None:
+            frame.parent.children.remove(frame)
+        samples = frame.samples
+        self.total_excluded += samples
+        self.total_samples -= samples
+        while frame.parent != None:
+            frame.parent.samples -= samples
+            frame = frame.parent
 
     def _build_frames(self, data):
         if not data:
@@ -250,8 +263,8 @@ class FlameCLI:
         stdscr.clear()
         init_colors()
 
-        self.frames = FrameSet()
-
+        self.data = read_stdin()
+        self.frames = FrameSet(self.data)
         self.frame_views = self.frames.get_frame_views(stdscr.getmaxyx()[1])
         self.fit_into_vertical_space()
         self.build_screen_index()
@@ -280,6 +293,16 @@ class FlameCLI:
         self.focus = None
         self.pinned = None
         self.rebuild_views()
+        self.render()
+
+    def rebuild_from_scratch(self):
+        self.selection = 0
+        self.focus = None
+        self.pinned = None
+        self.frames = FrameSet(self.data)
+        self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
+        self.fit_into_vertical_space()
+        self.build_screen_index()
         self.render()
 
     def set_focus(self):
@@ -380,6 +403,14 @@ class FlameCLI:
         self.frame_views = [v for v in self.frame_views if v.y < graph]
         # TODO: also modify last row if there were stacks below it?
 
+    def exclude_frame(self):
+        to_exclude = self.frame_views[self.selection].frame
+        self.frames.exclude_frame(to_exclude)
+        self.selection = 0
+        self.rebuild_views()
+        self.render()
+        
+
     def loop(self):
         while True:
             c = self.stdscr.getch()
@@ -398,12 +429,17 @@ class FlameCLI:
             if c == ord('r'):
                 self.reset_focus()
                 continue
+            if c == ord('R'):
+                self.rebuild_from_scratch()
+                continue
             if c == ord('f'):
                 self.set_focus()
                 continue
             if c == ord('p'):
                 self.set_pin()
                 continue
+            if c == ord('x'):
+                self.exclude_frame()
             if c == ord('q'):
                 break
             if c == curses.KEY_MOUSE:
