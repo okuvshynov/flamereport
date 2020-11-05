@@ -2,8 +2,9 @@ import curses
 import os
 import sys
 from curses import wrapper
+from itertools import groupby, tee
 from math import floor
-from operator import attrgetter
+from operator import attrgetter, itemgetter
 from random import randint
 
 ####
@@ -11,21 +12,6 @@ from random import randint
 # -- inverted view
 # -- consolidate visual representation
 # -- indicate truncated frames (above and below)
-
-# reading stacks from stdin
-def read_data():
-    # to read both piped stdin and use tty in curses
-    os.dup2(0, 3)
-    os.close(0)
-    sys.stdin = open('/dev/tty', 'r')
-
-    data = []
-    with os.fdopen(3, 'r') as stdin_piped:
-        for l in stdin_piped.readlines():
-            (stacks, cnt) = tuple(l.strip().split(' '))
-            data.append((stacks.split(';'), int(cnt))) 
-
-    return data
 
 # color initialization
 color_count = 0
@@ -61,7 +47,8 @@ class MultiFrameView:
         self.x = x
         self.y = y
         self.w = w
-        self.frames = frames
+        # sort by samples desc.
+        self.frames = sorted(frames, key=lambda f: - f.samples)
         self.samples = sum([f.samples for f in frames])
 
     def frameset(self):
@@ -119,7 +106,7 @@ class FrameView:
         if self.w == 0:
             return
         if self.w == 1:
-            txt = "#"
+            txt = "-"
         else:
             txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
         style = curses.color_pair(pick_color())
@@ -140,37 +127,52 @@ def view_contains(view, x, y):
 
 # set of all frames.
 class FrameSet:
-    def __init__(self, data):
+    def __init__(self):
+        data = self._read_stdin()
         # this is a list of top-level frames
         self.frames = self._build_frames(data)
-        # we are not settings parent to root by design.
-        # root is introduced just for convenience and is never
-        # visible in UI
+        self.total_samples = sum([a for (_, a) in data])
+        # we are not setting parent to root by design.
+        # root is introduced just for convenience and is not visible in UI
         self.root = Frame("root", sum([a for (_, a) in data]), self.frames)
+
+    # reading stacks from stdin
+    def _read_stdin(self):
+        # to read both piped stdin and use tty in curses
+        os.dup2(0, 3)
+        os.close(0)
+        sys.stdin = open('/dev/tty', 'r')
+
+        data = []
+        with os.fdopen(3, 'r') as stdin_piped:
+            for l in stdin_piped.readlines():
+                (stacks, cnt) = tuple(l.strip().split(' '))
+                data.append((stacks.split(';'), int(cnt))) 
+
+        return data
 
     def _build_frames(self, data):
         if not data:
             return None
-        agg = {}
-        for (s, n) in data:
-            if not s:
-                continue
-            if s[0] not in agg:
-                agg[s[0]] = (n, [(s[1:], n)])
-            else:
-                (old_cnt, old_children) = agg[s[0]]
-                agg[s[0]] = (old_cnt + n, old_children + [(s[1:], n)])
-
-        # now recursively call for each
         res = []
-        for k in agg.keys():
-            frame = Frame(k, agg[k][0], self._build_frames(agg[k][1]))
-            for c in frame.children:
-                c.parent = frame
+        data = sorted([(s[0], s[1:], n) for (s, n) in data if s])
+        for f, it in groupby(data, itemgetter(0)):
+            it1, it2 = tee(it)
+            samples = sum(cnt for (_, _, cnt) in it1)
+            children = ((s, cc) for (_, s, cc) in it2)
+            frame = Frame(f, samples, self._build_frames(children))
+            for ff in frame.children:
+                ff.parent = frame
             res.append(frame)
+
         return res
 
     # prepare views at current level of granularity and position
+    # frames - group of frames with common parent, which we need to generate
+    #          view for
+    # width  - size in characters of the area available
+    # s      - total number of samples to fill width
+    # x, y   - coordinates on the screen
     def _get_views_rec(self, frames, width, s = 0, x = 0, y = 0):
         if s == 0:
             s = sum([f.samples for f in frames])
@@ -240,7 +242,6 @@ class StatusArea:
             self.scr.addstr(y + i, 0, l.ljust(cols - 1)[:(cols - 1)])
         self.old_lines = len(lines)
 
-
 class FlameCLI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -249,9 +250,7 @@ class FlameCLI:
         stdscr.clear()
         init_colors()
 
-        data = read_data()
-        self.frames = FrameSet(data)
-        self.total_samples = sum([a for (_, a) in data])
+        self.frames = FrameSet()
 
         self.frame_views = self.frames.get_frame_views(stdscr.getmaxyx()[1])
         self.fit_into_vertical_space()
@@ -316,7 +315,7 @@ class FlameCLI:
 
     # output summary area
     def print_status_bar(self):
-        status = self.frame_views[self.selection].status(self.total_samples, self.status_height)
+        status = self.frame_views[self.selection].status(self.frames.total_samples, self.status_height)
         self.status_area.draw(status)
 
     # output debug line
@@ -353,7 +352,7 @@ class FlameCLI:
             self.stdscr.refresh()
 
     # returns a tuple (characters for chart, characters for status)
-    def allocate_vertical_space(self, frame_views):
+    def _allocate_vertical_space(self, frame_views):
         height = self.stdscr.getmaxyx()[0]
         if height <= 0:
             return (0, 0)
@@ -376,7 +375,7 @@ class FlameCLI:
         return (height - 1, 1)
 
     def fit_into_vertical_space(self):
-        (graph, status) = self.allocate_vertical_space(self.frame_views)
+        (graph, status) = self._allocate_vertical_space(self.frame_views)
         self.status_height = status
         self.frame_views = [v for v in self.frame_views if v.y < graph]
         # TODO: also modify last row if there were stacks below it?
