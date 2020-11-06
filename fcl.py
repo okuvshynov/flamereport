@@ -135,7 +135,7 @@ def read_stdin():
     data = []
     with os.fdopen(3, 'r') as stdin_piped:
         for l in stdin_piped.readlines():
-            (stacks, cnt) = tuple(l.strip().split(' '))
+            (stacks, _, cnt) = l.strip().rpartition(' ')
             data.append((stacks.split(';'), int(cnt))) 
 
     return data
