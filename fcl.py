@@ -245,7 +245,7 @@ class StatusArea:
         self.scr = stdscr
         self.old_lines = 0
 
-    def draw(self, lines):
+    def draw(self, lines, warn = None):
         rows, cols = self.scr.getmaxyx()
         if len(lines) < self.old_lines:
             for i in range(self.old_lines):
@@ -254,6 +254,13 @@ class StatusArea:
         for (i, l) in enumerate(lines):
             self.scr.addstr(y + i, 0, l.ljust(cols - 1)[:(cols - 1)])
         self.old_lines = len(lines)
+
+        if warn == None:
+            return
+
+        # warning should fit on the screen
+        warn = warn[1 - cols:]
+        self.scr.addstr(rows - 1, cols - len(warn) - 1, warn)
 
 class FlameCLI:
     def __init__(self, stdscr):
@@ -338,8 +345,18 @@ class FlameCLI:
 
     # output summary area
     def print_status_bar(self):
-        status = self.frame_views[self.selection].status(self.frames.total_samples, self.status_height)
-        self.status_area.draw(status)
+        samples = self.frames.total_samples
+        excluded = self.frames.total_excluded
+        if not self.frame_views:
+            status = []
+        else:
+            view = self.frame_views[self.selection]
+            status = view.status(samples, self.status_height)
+        warning = None
+        if excluded > 0:
+            pe = 100.0 * excluded / (samples + excluded)
+            warning = "{:.2f}% samples excluded".format(pe)
+        self.status_area.draw(status, warning)
 
     # output debug line
     def ppp(self, s):
@@ -381,6 +398,8 @@ class FlameCLI:
             return (0, 0)
         if height == 1:
             return (1, 0)
+        if not frame_views:
+            return (height - 1, 1)
         
         chart_area_height = 1 + max([v.y for v in frame_views])
         status_area_height = 1 + max([v.frame_count() for v in frame_views])
