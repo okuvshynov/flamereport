@@ -9,7 +9,6 @@ from random import randint
 
 ####
 # next things to do:
-# -- inverted view
 # -- consolidate visual representation
 # -- indicate truncated frames (above and below)
 
@@ -151,18 +150,18 @@ class FrameSet:
         self.root = Frame("root", sum([a for (_, a) in data]), self.frames)
         self.total_excluded = 0
 
-    def exclude_frame(self, frame):
-        # on top level
-        if frame in self.frames:
-            self.frames.remove(frame)
-        if frame.parent != None:
-            frame.parent.children.remove(frame)
-        samples = frame.samples
-        self.total_excluded += samples
-        self.total_samples -= samples
-        while frame.parent != None:
-            frame.parent.samples -= samples
-            frame = frame.parent
+    def exclude_frames(self, frames):
+        for frame in frames:
+            if frame in self.frames:
+                self.frames.remove(frame)
+            if frame.parent != None:
+                frame.parent.children.remove(frame)
+            samples = frame.samples
+            self.total_excluded += samples
+            self.total_samples -= samples
+            while frame.parent != None:
+                frame.parent.samples -= samples
+                frame = frame.parent
 
     def _build_frames(self, data):
         if not data:
@@ -423,8 +422,8 @@ class FlameCLI:
         # TODO: also modify last row if there were stacks below it?
 
     def exclude_frame(self):
-        to_exclude = self.frame_views[self.selection].frame
-        self.frames.exclude_frame(to_exclude)
+        to_exclude = self.frame_views[self.selection].frameset()
+        self.frames.exclude_frames(to_exclude)
         self.selection = 0
         self.rebuild_views()
         self.render()
