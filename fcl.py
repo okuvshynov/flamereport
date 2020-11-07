@@ -49,6 +49,7 @@ class MultiFrameView:
         # sort by samples desc.
         self.frames = sorted(frames, key=lambda f: - f.samples)
         self.samples = sum([f.samples for f in frames])
+        self.color = pick_color()
 
     def frameset(self):
         return self.frames
@@ -64,7 +65,7 @@ class MultiFrameView:
         else:
             txt = "[{}]".format("+" * (self.w - 2))
 
-        style = curses.color_pair(pick_color())
+        style = curses.color_pair(self.color)
         if highlight:
             style = style | curses.A_REVERSE
 
@@ -93,6 +94,7 @@ class FrameView:
         self.y = y
         self.w = w
         self.frame = frame
+        self.color = pick_color()
 
     def frameset(self):
         return [self.frame]
@@ -108,7 +110,7 @@ class FrameView:
             txt = "-"
         else:
             txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
-        style = curses.color_pair(pick_color())
+        style = curses.color_pair(self.color)
         if highlight:
             style = style | curses.A_REVERSE
         scr.addstr(self.y, self.x, txt, style)
@@ -150,6 +152,14 @@ class FrameSet:
         self.root = Frame("root", sum([a for (_, a) in data]), self.frames)
         self.total_excluded = 0
 
+    # is used to remove empty parents
+    def _exclude_empty_frame(self, frame):
+        assert(frame.samples == 0)
+        if frame in self.frames:
+            self.frames.remove(frame)
+        if frame.parent != None:
+            frame.parent.children.remove(frame)
+
     def exclude_frames(self, frames):
         for frame in frames:
             if frame in self.frames:
@@ -161,6 +171,11 @@ class FrameSet:
             self.total_samples -= samples
             while frame.parent != None:
                 frame.parent.samples -= samples
+                if frame.parent.samples == 0:
+                    assert(len(frame.parent.children) == 0)
+                    # remove the parent as well
+                    self._exclude_empty_frame(frame.parent)
+
                 frame = frame.parent
 
     def _build_frames(self, data):
@@ -204,6 +219,7 @@ class FrameSet:
         # for now just append as a single frame view
         # this will work bad if ALL frames are small in current view
         # in this case, we'll never be able to dive into it
+        # maybe a better way would be to split into several 'multiframes'
         if len(leftovers) > 1:
             samples = sum([f.samples for f in leftovers])
             w = max(1, int(floor(1.0 * width * samples / s)))
@@ -285,6 +301,7 @@ class FlameCLI:
 
     # rebuilding all blocks, while keeping selection
     def rebuild_views(self):
+        # TODO: this has a bug: selection is empty when we remove
         selected_frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1], self.focus, self.pinned)
         self.fit_into_vertical_space()
@@ -338,7 +355,8 @@ class FlameCLI:
 
     # TODO better way would be to use frame hierarchy rather than view hierarchy
     def assign_parents(self):
-        for v in self.frame_views:
+        for (i, v) in enumerate(self.frame_views):
+            v.self_index = i
             v.parent_index = self.lookup_view_index(v.x, v.y - 1)
             v.first_child_index = self.lookup_view_index(v.x, v.y + 1)
 
@@ -424,7 +442,20 @@ class FlameCLI:
     def exclude_frame(self):
         to_exclude = self.frame_views[self.selection].frameset()
         self.frames.exclude_frames(to_exclude)
+
         self.selection = 0
+        # if we exclude frame and its children, reasonable thing to
+        # do is to focus on parent
+        # it might, however, happen that parent gets excluded as well
+        if self.focus == to_exclude and len(self.focus) > 0:
+            new_focus = self.focus[0].parent
+            self.focus = None
+            while new_focus != None:
+                if new_focus.samples > 0: # not excluded
+                    self.focus = [new_focus]
+                    break
+                new_focus = new_focus.parent
+
         self.rebuild_views()
         self.render()
         
