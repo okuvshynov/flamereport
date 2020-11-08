@@ -81,6 +81,9 @@ class MultiFrameView:
     def status(self, total, height):
         if height < 1:
             return []
+        if self.frame_count() == 1:
+            f = self.frames[0]
+            return ["{} ({} samples, {:.2f}%)".format(f.title, f.samples, 100.0 * f.samples / total)]
         summary = ["Aggregated {} frames (total {} samples, {:.2f}%)".format(self.frame_count(), self.samples, 100.0 * self.samples / total)]
         if height == 1:
             return summary
@@ -199,6 +202,11 @@ class FrameSet:
 
         return res
 
+    # seems like there's not much point showing 1-2 character frames
+    # let's prefer to aggregate them to 3 characters [+]
+    # and for anything with 3 characters, hide their children, if they exist
+    # if not, use [-]
+
     # prepare views at current level of granularity and position
     # frames - group of frames with common parent, which we need to generate
     #          view for
@@ -212,11 +220,10 @@ class FrameSet:
         # these are 'small' frames
         leftovers = []
         for f in frames:
-            if width * f.samples < s:
-                # this means, this stack takes less than 1 character
+            w = width * f.samples / s
+            if w < 4:
                 leftovers.append(f)
                 continue
-            w = int(floor(1.0 * width * f.samples / s))
             res.append(FrameView(x, y, w, f))
             res += self._get_views_rec(f.children, w, f.samples, x, y + 1)
             x = x + w
@@ -225,12 +232,10 @@ class FrameSet:
         # this will work bad if ALL frames are small in current view
         # in this case, we'll never be able to dive into it
         # maybe a better way would be to split into several 'multiframes'
-        if len(leftovers) > 1:
+        if leftovers:
             samples = sum([f.samples for f in leftovers])
-            w = max(1, int(floor(1.0 * width * samples / s)))
+            w = max(1, width * samples / s)
             res.append(MultiFrameView(x, y, w, leftovers))
-        elif len(leftovers) == 1:
-            res.append(FrameView(x, y, 1, leftovers[0]))
         return res
 
     # This method prepares blocks from a subset of frame set,
@@ -512,6 +517,7 @@ class FlameCLI:
                 continue
             if c == ord('x'):
                 self.exclude_frame()
+                continue
             if c == ord('q'):
                 break
             if c == curses.KEY_MOUSE:
