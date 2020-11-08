@@ -6,6 +6,9 @@ from itertools import groupby, tee
 from math import floor
 from operator import attrgetter, itemgetter
 from random import randint
+import logging
+
+logging.basicConfig(filename='flametui.debug.log',level=logging.CRITICAL)
 
 ####
 # next things to do:
@@ -132,12 +135,12 @@ def view_contains(view, x, y):
 # reading stacks from stdin
 def read_stdin():
     # to read both piped stdin and use tty in curses
-    os.dup2(0, 3)
+    os.dup2(0, 4)
     os.close(0)
     sys.stdin = open('/dev/tty', 'r')
 
     data = []
-    with os.fdopen(3, 'r') as stdin_piped:
+    with os.fdopen(4, 'r') as stdin_piped:
         for l in stdin_piped.readlines():
             (stacks, _, cnt) = l.strip().rpartition(' ')
             data.append((stacks.split(';'), int(cnt))) 
@@ -162,11 +165,13 @@ class FrameSet:
 
     def exclude_frames(self, frames):
         for frame in frames:
+            logging.debug("Excluding {}".format(frame.title))
             if frame in self.frames:
                 self.frames.remove(frame)
             if frame.parent != None:
                 frame.parent.children.remove(frame)
             samples = frame.samples
+            frame.samples = 0
             self.total_excluded += samples
             self.total_samples -= samples
             while frame.parent != None:
