@@ -12,6 +12,9 @@ from random import randint
 # -- consolidate visual representation
 # -- indicate truncated frames (above and below)
 
+# selection - can be single view at any moment of time
+# focus/pin - can be set of frames
+
 # color initialization
 color_count = 0
 def init_colors():
@@ -147,9 +150,6 @@ class FrameSet:
         # this is a list of top-level frames
         self.frames = self._build_frames(data)
         self.total_samples = sum([a for (_, a) in data])
-        # we are not setting parent to root by design.
-        # root is introduced just for convenience and is not visible in UI
-        self.root = Frame("root", sum([a for (_, a) in data]), self.frames)
         self.total_excluded = 0
 
     # is used to remove empty parents
@@ -231,22 +231,23 @@ class FrameSet:
     # This method prepares blocks from a subset of frame set,
     # optionally focusing on a specific frame view.
     # All descendants of that frame will be shown,
-    # as well as path to the root.
+    # as well as path to the root. If pin is not None though, 
+    # we'll only show path to the pin
     def get_frame_views(self, width, focus = None, pin = None):
         root_path = []
-        if pin is None:
-            pin = []
+        # pin becomes new root selection instead of self.frames
+        root_level = pin if pin is not None else self.frames
         
-        if focus and (focus[0] not in pin):
+        if focus and (focus[0] not in root_level):
             frame = focus[0].parent
             while frame is not None:
                 root_path.insert(0, frame)
-                if frame in pin:
+                if frame in root_level:
                     break
                 frame = frame.parent
 
         if focus is None:
-            focus = self.root.children
+            focus = root_level
 
         res = [FrameView(0, i, width, f) for (i, f) in enumerate(root_path)]
         samples = sum([f.samples for f in focus])
@@ -283,25 +284,16 @@ class FlameCLI:
         curses.curs_set(0)
         curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
         stdscr.clear()
+        self.status_area = StatusArea(self.stdscr)
         init_colors()
 
         self.data = read_stdin()
-        self.frames = FrameSet(self.data)
-        self.frame_views = self.frames.get_frame_views(stdscr.getmaxyx()[1])
-        self.fit_into_vertical_space()
-        self.build_screen_index()
-        self.status_area = StatusArea(self.stdscr)
-        # index of selected frame view
-        self.selection = 0
-        # focus on frameset means 'expand it to 100% width'
-        self.focus = None
-        self.pinned = None
+        self.build()
         self.render()
     
 
-    # rebuilding all blocks, while keeping selection
+    # rebuilding all views, while keeping selection
     def rebuild_views(self):
-        # TODO: this has a bug: selection is empty when we remove
         selected_frames = self.frame_views[self.selection].frameset()
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1], self.focus, self.pinned)
         self.fit_into_vertical_space()
@@ -312,16 +304,23 @@ class FlameCLI:
                 break
         self.build_screen_index()
 
-    def reset_focus(self):
+    def clear_focus(self):
         self.focus = None
         self.pinned = None
         self.rebuild_views()
         self.render()
 
-    def rebuild_from_scratch(self):
+    def build(self):
+        # index of a view currently under cursor
+        # TODO: store view itself, not index
         self.selection = 0
+        # list of frames on the same level with the same parent
+        # this list would be expanded to 100% width, their parents would too
         self.focus = None
+        # list of frames on the same level with the same parent whom we consider
+        # new 'root level'
         self.pinned = None
+
         self.frames = FrameSet(self.data)
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
         self.fit_into_vertical_space()
@@ -340,6 +339,7 @@ class FlameCLI:
         self.render()
 
     # index of 'coords' -> view
+    # if used for navigation and mouse events
     def build_screen_index(self):
         self.screen_index = [[] for _ in range(self.stdscr.getmaxyx()[0])]
         for (i, v) in enumerate(self.frame_views):
@@ -374,11 +374,6 @@ class FlameCLI:
             pe = 100.0 * excluded / (samples + excluded)
             warning = "{:.2f}% samples excluded".format(pe)
         self.status_area.draw(status, warning)
-
-    # output debug line
-    def ppp(self, s):
-        rows, cols = self.stdscr.getmaxyx()
-        self.stdscr.addstr(rows - 2, 0, "{}".format(s).ljust(cols))
 
     def render(self): 
         self.stdscr.clear()
@@ -439,24 +434,47 @@ class FlameCLI:
         self.frame_views = [v for v in self.frame_views if v.y < graph]
         # TODO: also modify last row if there were stacks below it?
 
+    # returns first non-empty frameset in a hierarchy
+    def _find_nonempty_parent(self, frameset):
+        if frameset is None:
+            return None
+        samples = lambda frames: sum([f.samples for f in frames])
+        f = [f for f in frameset if f]
+        while f:
+            if samples(f) > 0:
+                return f
+            f = [f[0].parent]
+        return None
+
     def exclude_frame(self):
         to_exclude = self.frame_views[self.selection].frameset()
         self.frames.exclude_frames(to_exclude)
-
         self.selection = 0
-        # if we exclude frame and its children, reasonable thing to
-        # do is to focus on parent
-        # it might, however, happen that parent gets excluded as well
-        if self.focus == to_exclude and len(self.focus) > 0:
-            new_focus = self.focus[0].parent
+        # everything is removed
+        if self.frames.total_samples == 0:
             self.focus = None
-            while new_focus != None:
-                if new_focus.samples > 0: # not excluded
-                    self.focus = [new_focus]
-                    break
-                new_focus = new_focus.parent
+            self.pinned = None
+            self.rebuild_views()
+            self.render()
+            return
+
+        # pick focus 
+        self.focus = self._find_nonempty_parent(self.focus)
+
+        # pick selection
+        new_selection = self._find_nonempty_parent([to_exclude[0].parent])
+
+        # pick pinned 
+        self.pinned = self._find_nonempty_parent(self.pinned)
 
         self.rebuild_views()
+
+        if new_selection is not None:
+            for (i, v) in enumerate(self.frame_views):
+                if v.matches(new_selection):
+                    self.selection = i
+                    break
+
         self.render()
         
 
@@ -476,10 +494,10 @@ class FlameCLI:
                 self.select_down()
                 continue
             if c == ord('r'):
-                self.reset_focus()
+                self.clear_focus()
                 continue
             if c == ord('R'):
-                self.rebuild_from_scratch()
+                self.build()
                 continue
             if c == ord('f'):
                 self.set_focus()
