@@ -68,7 +68,6 @@ Please check http://www.brendangregg.com/flamegraphs.html
 * R - hard reset, brings everything to default view; Useful after exclusions.
 * single mouse click - select the block
 * double mouse click - zoom into the block. Equivalent to 'f'
-* \* - select all frames with the same name as current selection. Useful for highlighting commonly used functions (e.g. malloc)
 * q - quit
 
 ## Output description

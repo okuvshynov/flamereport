@@ -18,9 +18,12 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # -- support search with /
 # -- refactor a little
 
+# -- full focus -- show ALL frames with name N with all its children
+
 # selection - can be single view at any moment of time
 # -- multiselect is toggled with * and selects all frames with the same name
 # focus/pin - can be set of frames
+
 
 # color initialization
 color_count = 0
@@ -29,7 +32,7 @@ def init_colors():
     # monochrome, 16 colors, 256 colors modes
     colors = []
     if curses.COLORS >= 256:
-        colors = [214, 202, 208, 196, 166, 172, 178]
+        colors = [214, 208, 202, 196, 166, 172]
     elif curses.COLORS >= 16:
         colors = [curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN]
 
@@ -38,9 +41,11 @@ def init_colors():
     color_count = len(colors)
     if curses.COLORS >= 16:
         # TODO - selection colors
-        curses.init_pair(color_count + 1, curses.COLOR_BLACK, 82)
+        curses.init_pair(color_count + 1, curses.COLOR_BLACK, 46)
+        curses.init_pair(color_count + 2, curses.COLOR_BLACK, 156)
     else:
         curses.init_pair(color_count + 1, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        curses.init_pair(color_count + 2, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
 def pick_color():
     global color_count
@@ -67,6 +72,7 @@ class Frame:
             return self.samples
         return sum([f.samples_with_title(title) for f in self.children])
 
+
 # compressed multiframe view for presenting multiple frames in a single cell
 # we need that in TUI version as some stacks would be < 1 character otherwise
 class MultiFrameView:
@@ -85,19 +91,18 @@ class MultiFrameView:
     def frame_count(self):
         return len(self.frames)
 
-    def draw(self, scr, highlight):
+    def draw(self, scr, selected, matched):
         if self.w == 0:
             return
         if self.w == 1:
             txt = "+"
         else:
             txt = "[{}]".format("+" * (self.w - 2))
-
         style = curses.color_pair(self.color)
-        if highlight:
-            #style = style | curses.A_REVERSE
+        if selected:
             style = curses.color_pair(pick_selection_color())
-
+        elif matched:
+            style = curses.color_pair(pick_selection_color() + 1)
         scr.addstr(self.y, self.x, txt, style)
     
     # render summary of the multiframe
@@ -139,7 +144,7 @@ class FrameView:
     def frame_count(self):
         return 1
 
-    def draw(self, scr, highlight):
+    def draw(self, scr, selected, matched):
         # this should never happen?
         if self.w == 0:
             return
@@ -148,9 +153,10 @@ class FrameView:
         else:
             txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
         style = curses.color_pair(self.color)
-        if highlight:
-            #style = style | curses.A_REVERSE
+        if selected:
             style = curses.color_pair(pick_selection_color())
+        elif matched:
+            style = curses.color_pair(pick_selection_color() + 1)
         scr.addstr(self.y, self.x, txt, style)
 
     # single frame might get multiselection
@@ -358,6 +364,7 @@ class FlameCLI:
                 self.selection = i
                 break
         self.build_screen_index()
+        self.highlight_same()
 
     def clear_focus(self):
         self.focus = None
@@ -435,18 +442,19 @@ class FlameCLI:
     def render(self): 
         self.stdscr.clear()
         for (i, _) in enumerate(self.frame_views):
-            self.frame_views[i].draw(self.stdscr, i == self.selection or i in self.multiselect)
+            self.frame_views[i].draw(self.stdscr, i == self.selection, i in self.multiselect)
         self.print_status_bar()
 
     def change_selection(self, s):
         if s is None:
             return False
         for i in self.multiselect:
-            self.frame_views[i].draw(self.stdscr, False)
+            self.frame_views[i].draw(self.stdscr, False, False)
         self.multiselect = []
-        self.frame_views[self.selection].draw(self.stdscr, False)
+        self.frame_views[self.selection].draw(self.stdscr, False, False)
         self.selection = s
-        self.frame_views[self.selection].draw(self.stdscr, True)
+        self.frame_views[self.selection].draw(self.stdscr, True, False)
+        self.highlight_same()
         self.print_status_bar()
         return True
 
@@ -582,9 +590,6 @@ class FlameCLI:
                 continue
             if c == ord('x'):
                 self.exclude_frame()
-                continue
-            if c == ord('*'):
-                self.highlight_same()
                 continue
             if c == ord('q'):
                 break
