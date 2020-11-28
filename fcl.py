@@ -3,7 +3,7 @@ import os
 import sys
 from curses import wrapper
 from itertools import groupby, tee, chain
-from operator import attrgetter, itemgetter
+from operator import attrgetter, invert, itemgetter
 from random import randint
 import logging
 
@@ -17,7 +17,6 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # -- support ? and show help window
 # -- support search with /
 # -- refactor a little
-# -- invert
 
 # selection - can be single view at any moment of time
 # -- multiselect is toggled with * and selects all frames with the same name
@@ -202,8 +201,10 @@ def read_stdin():
 
 # set of all frames.
 class FrameSet:
-    def __init__(self, data):
+    def __init__(self, data, inverted=False):
         # this is a list of top-level frames
+        if inverted:
+            data = [(list(reversed(f)), s) for (f, s) in data]
         self.frames = self._build_frames(data)
         self.total_samples = sum([a for (_, a) in data])
         self.total_excluded = 0
@@ -402,7 +403,7 @@ class FlameCLI:
         self.rebuild_views()
         self.render()
 
-    def build(self):
+    def build(self, inverted=False):
         # index of a view currently under cursor
         # TODO: store view itself, not index
         self.selection = 0
@@ -413,7 +414,7 @@ class FlameCLI:
         # new 'root level'
         self.pinned = None
 
-        self.frames = FrameSet(self.data)
+        self.frames = FrameSet(self.data, inverted=inverted)
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
         self.fit_into_vertical_space()
         self.build_screen_index()
@@ -631,6 +632,9 @@ class FlameCLI:
                 continue
             if c == ord('x'):
                 self.exclude_frame()
+                continue
+            if c == ord('I'):
+                self.build(inverted=True)
                 continue
             if c == ord('q'):
                 break
