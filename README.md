@@ -63,6 +63,7 @@ Please check http://www.brendangregg.com/flamegraphs.html
 * down/j - select the block below
 * f - focus. Zoom into selected frame; makes it fit whole width, hides the siblings.
 * p - pin to top. This zooms into selected frame (like 'f') and hides parent frames. This is useful for deep traces, as there's no scrolling functionality.
+* F - hard focus. Zoom into all frames with title of selected frame, pin them to top.
 * x - eXclude frame. Removes the selected frame, its children and shrinks parents accordingly. This is useful when the graph is dominated by few large but not particularly interesting frames; It provides a more convenient view compared to focusing on 'smaller but more interesting' frames individually.
 * r - reset focus. Resets the focus but keeps exculded frames excluded.
 * R - hard reset, brings everything to default view; Useful after exclusions.

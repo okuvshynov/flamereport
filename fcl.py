@@ -2,7 +2,7 @@ import curses
 import os
 import sys
 from curses import wrapper
-from itertools import groupby, tee
+from itertools import groupby, tee, chain
 from operator import attrgetter, itemgetter
 from random import randint
 import logging
@@ -17,8 +17,7 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # -- support ? and show help window
 # -- support search with /
 # -- refactor a little
-
-# -- full focus -- show ALL frames with name N with all its children
+# -- invert
 
 # selection - can be single view at any moment of time
 # -- multiselect is toggled with * and selects all frames with the same name
@@ -34,7 +33,7 @@ def init_colors():
     if curses.COLORS >= 256:
         colors = [214, 208, 202, 196, 166, 172]
     elif curses.COLORS >= 16:
-        colors = [curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN]
+        colors = [curses.COLOR_RED, curses.COLOR_YELLOW]
 
     for (i, c) in enumerate(colors):
         curses.init_pair(i + 1, curses.COLOR_BLACK, c)
@@ -72,6 +71,12 @@ class Frame:
             return self.samples
         return sum([f.samples_with_title(title) for f in self.children])
 
+    # returns all topline frames matching title
+    # once we encounter title we do NOT go deeper
+    def all_by_title(self, title):
+        if self.title == title:
+            return [self]
+        return list(chain.from_iterable([f.all_by_title(title) for f in self.children]))
 
 # compressed multiframe view for presenting multiple frames in a single cell
 # we need that in TUI version as some stacks would be < 1 character otherwise
@@ -231,8 +236,33 @@ class FrameSet:
                     assert(len(frame.parent.children) == 0)
                     # remove the parent as well
                     self._exclude_empty_frame(frame.parent)
-
                 frame = frame.parent
+
+    def merge_frames(self, frames):
+        title = lambda f: f.title
+        res = []
+        for k, g in groupby(sorted(frames, key=title), title):
+            # TODO no need to make a list here
+            to_merge = list(g)
+            all_children = list(chain.from_iterable([ff.children for ff in to_merge]))
+            f = Frame(k, sum([ff.samples for ff in to_merge]), self.merge_frames(all_children))
+            for ff in f.children:
+                ff.parent = f
+            res.append(f)
+        return res
+
+    # pick all frames by title (e.g. malloc) and show all their children
+    # pim them to the top regardless of where are they in the original 
+    # frame set.
+    # useful to see 'who calls function X'
+    def hard_focus(self, title):
+        frames = list(chain.from_iterable([f.all_by_title(title) for f in self.frames]))
+        # we have single root, and need to merge children
+        roots = self.merge_frames(frames)
+        assert(len(roots) == 1)
+        self.frames = roots
+        self.total_excluded += (self.total_samples - roots[0].samples)
+        self.total_samples = roots[0].samples
 
     def _build_frames(self, data):
         if not data:
@@ -561,6 +591,14 @@ class FlameCLI:
         self.multiselect_samples = self.frames.samples_with_title(title)
         self.render()
 
+    def hard_focus(self):
+        frames = self.frame_views[self.selection].frameset()
+        if len(frames) != 1:
+            return
+        self.frames.hard_focus(frames[0].title)
+        self.rebuild_views()
+        self.render()
+
     def loop(self):
         while True:
             c = self.stdscr.getch()
@@ -584,6 +622,9 @@ class FlameCLI:
                 continue
             if c == ord('f'):
                 self.set_focus()
+                continue
+            if c == ord('F'):
+                self.hard_focus()
                 continue
             if c == ord('p'):
                 self.set_pin()
