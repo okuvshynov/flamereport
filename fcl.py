@@ -17,11 +17,12 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # -- support ? and show help window
 # -- support search with /
 # -- refactor a little
+# -- shall invert keep selection? exclusion? focus?
+#   -- yes. Invert should keep current selection?
 
 # selection - can be single view at any moment of time
 # -- multiselect is toggled with * and selects all frames with the same name
 # focus/pin - can be set of frames
-
 
 # color initialization
 color_count = 0
@@ -463,7 +464,7 @@ class FlameCLI:
         else:
             view = self.frame_views[self.selection]
             multi = self.multiselect_samples if self.multiselect else None
-            status = view.status(samples, self.status_height, multi)
+            status = view.status(samples + excluded, self.status_height, multi)
         warning = None
         if excluded > 0:
             pe = 100.0 * excluded / (samples + excluded)
