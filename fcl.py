@@ -18,8 +18,6 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # -- support search with /
 # -- refactor a little
 # -- shall invert keep selection? exclusion? focus?
-#   -- yes. Invert should keep current selection?
-
 # selection - can be single view at any moment of time
 # -- multiselect is toggled with * and selects all frames with the same name
 # focus/pin - can be set of frames
@@ -172,7 +170,6 @@ class FrameView:
         ms = multiselect_samples
         if multiselect_samples is None or ms == s:
             return ["{} ({} samples, {:.2f}%)".format(self.frame.title, s, 100.0 * s / total)]
-        
         return ["{} ({} samples, {:.2f}% | {} samples, {:.2f}% in selection)".format(self.frame.title, s, 100.0 * s / total, ms, 100.0 * ms / total)]
         
 
@@ -415,6 +412,8 @@ class FlameCLI:
         # new 'root level'
         self.pinned = None
 
+        self.inverted = inverted
+
         self.frames = FrameSet(self.data, inverted=inverted)
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
         self.fit_into_vertical_space()
@@ -466,9 +465,13 @@ class FlameCLI:
             multi = self.multiselect_samples if self.multiselect else None
             status = view.status(samples + excluded, self.status_height, multi)
         warning = None
+        w = []
         if excluded > 0:
             pe = 100.0 * excluded / (samples + excluded)
-            warning = "{:.2f}% samples excluded".format(pe)
+            w.append("{:.2f}% samples excluded".format(pe))
+        if self.inverted:
+            w.append("Inverted") 
+        warning = "|".join(w)
         self.status_area.draw(status, warning)
 
     def render(self): 
@@ -635,7 +638,7 @@ class FlameCLI:
                 self.exclude_frame()
                 continue
             if c == ord('I'):
-                self.build(inverted=True)
+                self.build(inverted=not self.inverted)
                 continue
             if c == ord('q'):
                 break
