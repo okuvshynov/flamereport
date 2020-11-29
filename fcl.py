@@ -23,36 +23,33 @@ logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
 # focus/pin - can be set of frames
 
 # color initialization
-color_count = 0
-def init_colors():
-    global color_count
-    # monochrome, 16 colors, 256 colors modes
-    colors = []
-    if curses.COLORS >= 256:
+class Colors256:
+    color_count = 0
+
+    @staticmethod
+    def init():
         colors = [214, 208, 202, 196, 166, 172]
-    elif curses.COLORS >= 16:
-        colors = [curses.COLOR_RED, curses.COLOR_YELLOW]
+        selection_color = 46
+        selection_match_color = 156
+        for (i, c) in enumerate(colors):
+            curses.init_pair(i + 1, curses.COLOR_BLACK, c)
+        Colors256.color_count = len(colors)
+        curses.init_pair(Colors256.color_count + 1, curses.COLOR_BLACK, selection_color)
+        curses.init_pair(Colors256.color_count + 2, curses.COLOR_BLACK, selection_match_color)
 
-    for (i, c) in enumerate(colors):
-        curses.init_pair(i + 1, curses.COLOR_BLACK, c)
-    color_count = len(colors)
-    if curses.COLORS >= 16:
-        # TODO - selection colors
-        curses.init_pair(color_count + 1, curses.COLOR_BLACK, 46)
-        curses.init_pair(color_count + 2, curses.COLOR_BLACK, 156)
-    else:
-        curses.init_pair(color_count + 1, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        curses.init_pair(color_count + 2, curses.COLOR_BLACK, curses.COLOR_WHITE)
+    @staticmethod
+    def pick_color():
+        return randint(1, Colors256.color_count) if Colors256.color_count > 1 else 0
 
-def pick_color():
-    global color_count
-    return randint(1, color_count) if color_count > 1 else 0
+    @staticmethod
+    def selection_color():
+        return Colors256.color_count + 1
 
-def pick_selection_color():
-    global color_count
-    return color_count + 1
+    @staticmethod
+    def match_color():
+        return Colors256.color_count + 2
 
-# Frame represents stack frame itself, not the 'view'
+# Frame represents stack frame itself, not its representation on the scren
 class Frame:
     def __init__(self, title, samples, children):
         self.title = title
@@ -61,7 +58,7 @@ class Frame:
         self.parent = None
 
     # returns number of samples which belong to frame (or its children)
-    # which match the title (strict equality)
+    # which match the title (strict equality).
     # to avoid counting same samples twice, we do not go deeper if parent
     # already matches
     def samples_with_title(self, title):
@@ -76,9 +73,8 @@ class Frame:
             return [self]
         return list(chain.from_iterable([f.all_by_title(title) for f in self.children]))
 
-# compressed multiframe view for presenting multiple frames in a single cell
-# we need that in TUI version as some stacks would be < 1 character otherwise
-class MultiFrameView:
+# representation of a frame on a screen, with specific location/size
+class FrameView(object):
     def __init__(self, x, y, w, frames):
         self.x = x
         self.y = y
@@ -86,7 +82,15 @@ class MultiFrameView:
         # sort by samples desc.
         self.frames = sorted(frames, key=lambda f: - f.samples)
         self.samples = sum([f.samples for f in frames])
-        self.color = pick_color()
+        self.color = Colors256.pick_color()
+
+    def draw(self, scr, selected, matched):
+        style = curses.color_pair(self.color)
+        if selected:
+            style = curses.color_pair(Colors256.selection_color())
+        elif matched:
+            style = curses.color_pair(Colors256.match_color())
+        scr.addstr(self.y, self.x, self.txt, style)
 
     def frameset(self):
         return self.frames
@@ -94,29 +98,21 @@ class MultiFrameView:
     def frame_count(self):
         return len(self.frames)
 
-    def draw(self, scr, selected, matched):
-        if self.w == 0:
-            return
-        if self.w == 1:
-            txt = "+"
-        else:
-            txt = "[{}]".format("+" * (self.w - 2))
-        style = curses.color_pair(self.color)
-        if selected:
-            style = curses.color_pair(pick_selection_color())
-        elif matched:
-            style = curses.color_pair(pick_selection_color() + 1)
-        scr.addstr(self.y, self.x, txt, style)
-    
+# compressed multiframe view for presenting multiple frames in a single cell
+# we need that in TUI version as some stacks would be < 1 character otherwise
+class MultiFrameView(FrameView):
+    def __init__(self, x, y, w, frames):
+        assert(w > 0)
+        super(MultiFrameView, self).__init__(x, y, w, frames)
+        self.txt = "+" if w == 1 else "[{}]".format("+" * (w - 2))
+
     # render summary of the multiframe
     def status(self, total, height, multiselect_samples = None):
         # multiframe can not be 'selected' with *
         assert(multiselect_samples == None)
+        assert(self.frame_count() > 1)
         if height < 1:
             return []
-        if self.frame_count() == 1:
-            f = self.frames[0]
-            return ["{} ({} samples, {:.2f}%)".format(f.title, f.samples, 100.0 * f.samples / total)]
         summary = ["Aggregated {} frames (total {} samples, {:.2f}%)".format(self.frame_count(), self.samples, 100.0 * self.samples / total)]
         if height == 1:
             return summary
@@ -133,51 +129,29 @@ class MultiFrameView:
         return sum([f.samples_with_title(title) for f in self.frames]) > 0
 
 # representation of a frame on a screen, with specific location/size
-class FrameView:
+class SingleFrameView(FrameView):
     def __init__(self, x, y, w, frame):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.frame = frame
-        self.color = pick_color()
+        super(SingleFrameView, self).__init__(x, y, w, [frame])
+        self.txt = "-" if w == 1 else "[{}]".format(frame.title[:w - 2].ljust(w - 2, '-'))
 
-    def frameset(self):
-        return [self.frame]
-
-    def frame_count(self):
-        return 1
-
-    def draw(self, scr, selected, matched):
-        # this should never happen?
-        if self.w == 0:
-            return
-        if self.w == 1:
-            txt = "-"
-        else:
-            txt = "[{}]".format(self.frame.title[:self.w - 2].ljust(self.w - 2, '-'))
-        style = curses.color_pair(self.color)
-        if selected:
-            style = curses.color_pair(pick_selection_color())
-        elif matched:
-            style = curses.color_pair(pick_selection_color() + 1)
-        scr.addstr(self.y, self.x, txt, style)
-
-    # single frame might get multiselection
+    # single frame view might get multiselection
     def status(self, total, height, multiselect_samples = None):
+        assert(len(self.frames) == 1)
         if height < 1:
             return []
-        s = self.frame.samples
+
+        frame = self.frames[0]
+        s = frame.samples
         ms = multiselect_samples
         if multiselect_samples is None or ms == s:
-            return ["{} ({} samples, {:.2f}%)".format(self.frame.title, s, 100.0 * s / total)]
-        return ["{} ({} samples, {:.2f}% | {} samples, {:.2f}% in selection)".format(self.frame.title, s, 100.0 * s / total, ms, 100.0 * ms / total)]
-        
+            return ["{} ({} samples, {:.2f}%)".format(frame.title, s, 100.0 * s / total)]
+        return ["{} ({} samples, {:.2f}% | {} samples, {:.2f}% in selection)".format(frame.title, s, 100.0 * s / total, ms, 100.0 * ms / total)]
 
     def matches(self, frames):
-        return self.frame in frames
+        return self.frames[0] in frames
 
     def matches_title(self, title):
-        return self.frame.title == title
+        return self.frames[0].title == title
 
 def view_contains(view, x, y):
     return view.y == y and x >= view.x and x < view.x + view.w
@@ -279,11 +253,6 @@ class FrameSet:
 
         return res
 
-    # there's not much point showing 1-2 character frames
-    # let's prefer to aggregate them to 3 characters [+]
-    # and for anything with 3 characters, hide their children, if they exist
-    # if not, use [-]
-
     # prepare views at current level of granularity and position
     # frames - group of frames with common parent, which we need to generate
     #          view for
@@ -301,7 +270,7 @@ class FrameSet:
             if w < 4:
                 leftovers.append(f)
                 continue
-            res.append(FrameView(x, y, w, f))
+            res.append(SingleFrameView(x, y, w, f))
             res += self._get_views_rec(f.children, w, f.samples, x, y + 1)
             x = x + w
         
@@ -315,7 +284,7 @@ class FrameSet:
             if len(leftovers) > 1:
                 res.append(MultiFrameView(x, y, w, leftovers))
             else:
-                res.append(FrameView(x, y, w, leftovers[0]))
+                res.append(SingleFrameView(x, y, w, leftovers[0]))
         return res
 
     # This method prepares blocks from a subset of frame set,
@@ -339,7 +308,7 @@ class FrameSet:
         if focus is None:
             focus = root_level
 
-        res = [FrameView(0, i, width, f) for (i, f) in enumerate(root_path)]
+        res = [SingleFrameView(0, i, width, f) for (i, f) in enumerate(root_path)]
         samples = sum([f.samples for f in focus])
         res = res + self._get_views_rec(focus, width, samples, 0, len(res)) 
         res.sort(key = attrgetter("y", "x"))
@@ -375,8 +344,7 @@ class FlameCLI:
         curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
         stdscr.clear()
         self.status_area = StatusArea(self.stdscr)
-        init_colors()
-
+        Colors256.init()
         self.data = read_stdin()
         self.build()
         self.render()
@@ -422,6 +390,8 @@ class FlameCLI:
         self.render()
 
     def set_focus(self):
+        if not self.selection:
+            return
         self.focus = self.frame_views[self.selection].frameset()
         self.rebuild_views()
         self.render()
@@ -494,6 +464,8 @@ class FlameCLI:
         return True
 
     def move_selection(self, d):
+        if not self.frame_views:
+            return
         m = len(self.frame_views)
         if self.change_selection(((self.selection + d) % m + m) % m):
             self.stdscr.refresh()
@@ -550,6 +522,8 @@ class FlameCLI:
         return None
 
     def exclude_frame(self):
+        if not self.frame_views:
+            return
         to_exclude = self.frame_views[self.selection].frameset()
         self.frames.exclude_frames(to_exclude)
         self.selection = 0
@@ -586,6 +560,8 @@ class FlameCLI:
     # is a no-op
     def highlight_same(self):
         self.multiselect = []
+        if len(self.frame_views) == 0:
+            return
         frames = self.frame_views[self.selection].frameset()
         if len(frames) != 1:
             return
@@ -597,6 +573,8 @@ class FlameCLI:
         self.render()
 
     def hard_focus(self):
+        if not self.frame_views:
+            return
         frames = self.frame_views[self.selection].frameset()
         if len(frames) != 1:
             return
