@@ -1,26 +1,21 @@
 import curses
 import os
 import sys
-from curses import wrapper
 from itertools import groupby, tee, chain
-from operator import attrgetter, invert, itemgetter
+from operator import attrgetter, itemgetter
 from random import randint
-import logging
-
-logging.basicConfig(filename='flametui.debug.log',level=logging.DEBUG)
-
 ####
 # next things to do:
+
+# -- support ? and show help window
+# -- support search with /
 # -- consolidate visual representation
 # -- indicate truncated frames (above and below)
 # -- shortcuts like 'perf report'
-# -- support ? and show help window
-# -- support search with /
 # -- refactor a little
+#   -- views are effectively immutable.
 # -- shall invert keep selection? exclusion? focus?
 # selection - can be single view at any moment of time
-# -- multiselect is toggled with * and selects all frames with the same name
-# focus/pin - can be set of frames
 
 # color initialization
 class Colors256:
@@ -67,7 +62,7 @@ class Frame:
         return sum([f.samples_with_title(title) for f in self.children])
 
     # returns all topline frames matching title
-    # once we encounter title we do NOT go deeper
+    # once we encounter a match we do not go deeper
     def all_by_title(self, title):
         if self.title == title:
             return [self]
@@ -132,9 +127,15 @@ class MultiFrameView(FrameView):
 class SingleFrameView(FrameView):
     def __init__(self, x, y, w, frame):
         super(SingleFrameView, self).__init__(x, y, w, [frame])
-        self.txt = "-" if w == 1 else "[{}]".format(frame.title[:w - 2].ljust(w - 2, '-'))
+        if w == 1:
+            self.txt = '-'
+        else:
+            w = w - 2
+            self.txt = '[{}]'.format(frame.title[:w].ljust(w, '-'))
 
     # single frame view might get multiselection
+    # status here is also 'immutable' until we rebuild the views
+    # except, we don't know the height until we prepare all the views
     def status(self, total, height, multiselect_samples = None):
         assert(len(self.frames) == 1)
         if height < 1:
@@ -185,8 +186,7 @@ class FrameSet:
         return sum([f.samples_with_title(title) for f in self.frames])
 
     # is used to remove empty parents
-    def _exclude_empty_frame(self, frame):
-        assert(frame.samples == 0)
+    def _exclude_frame(self, frame):
         if frame in self.frames:
             self.frames.remove(frame)
         if frame.parent != None:
@@ -194,11 +194,7 @@ class FrameSet:
 
     def exclude_frames(self, frames):
         for frame in frames:
-            logging.debug("Excluding {}".format(frame.title))
-            if frame in self.frames:
-                self.frames.remove(frame)
-            if frame.parent != None:
-                frame.parent.children.remove(frame)
+            self._exclude_frame(frame)
             samples = frame.samples
             frame.samples = 0
             self.total_excluded += samples
@@ -208,17 +204,17 @@ class FrameSet:
                 if frame.parent.samples == 0:
                     assert(len(frame.parent.children) == 0)
                     # remove the parent as well
-                    self._exclude_empty_frame(frame.parent)
+                    self._exclude_frame(frame.parent)
                 frame = frame.parent
 
-    def merge_frames(self, frames):
+    def _merge_frames(self, frames):
         title = lambda f: f.title
         res = []
         for k, g in groupby(sorted(frames, key=title), title):
             # TODO no need to make a list here
             to_merge = list(g)
             all_children = list(chain.from_iterable([ff.children for ff in to_merge]))
-            f = Frame(k, sum([ff.samples for ff in to_merge]), self.merge_frames(all_children))
+            f = Frame(k, sum([ff.samples for ff in to_merge]), self._merge_frames(all_children))
             for ff in f.children:
                 ff.parent = f
             res.append(f)
@@ -226,12 +222,11 @@ class FrameSet:
 
     # pick all frames by title (e.g. malloc) and show all their children
     # pim them to the top regardless of where are they in the original 
-    # frame set.
-    # useful to see 'who calls function X'
+    # frame set. useful to see 'who calls function X'
     def hard_focus(self, title):
         frames = list(chain.from_iterable([f.all_by_title(title) for f in self.frames]))
         # we have single root, and need to merge children
-        roots = self.merge_frames(frames)
+        roots = self._merge_frames(frames)
         assert(len(roots) == 1)
         self.frames = roots
         self.total_excluded += (self.total_samples - roots[0].samples)
@@ -262,11 +257,13 @@ class FrameSet:
     def _get_views_rec(self, frames, width, s = 0, x = 0, y = 0):
         if s == 0:
             s = sum([f.samples for f in frames])
+        assert isinstance(s, int)
         res = []
         # these are 'small' frames
         leftovers = []
         for f in frames:
-            w = width * f.samples / s
+            w = int(width * f.samples / s)
+            assert isinstance(w, int)
             if w < 4:
                 leftovers.append(f)
                 continue
@@ -280,7 +277,7 @@ class FrameSet:
         # maybe a better way would be to split into several 'multiframes'
         if leftovers:
             samples = sum([f.samples for f in leftovers])
-            w = max(1, width * samples / s)
+            w = max(1, int(width * samples / s))
             if len(leftovers) > 1:
                 res.append(MultiFrameView(x, y, w, leftovers))
             else:
@@ -555,9 +552,8 @@ class FlameCLI:
         self.render()
 
     # selects all frames with current selection title.
-    # invoked when * is pressed on a single-fram view
-    # works only if selection is single-frame, in case of multiframe view
-    # is a no-op
+    # works only if selection is single-frame, 
+    # in case of multiframe view is a no-op
     def highlight_same(self):
         self.multiselect = []
         if len(self.frame_views) == 0:
@@ -642,4 +638,4 @@ def main(stdscr):
     h = FlameCLI(stdscr)
     h.loop()
 
-wrapper(main)
+curses.wrapper(main)
