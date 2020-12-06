@@ -12,10 +12,13 @@ from random import randint
 # -- consolidate visual representation
 # -- indicate truncated frames (above and below)
 # -- shortcuts like 'perf report'
+# -- navigation within selection ('n' - next selection)
 # -- refactor a little
 #   -- views are effectively immutable.
 # -- shall invert keep selection? exclusion? focus?
-# selection - can be single view at any moment of time
+# -- handle long frame titles better
+#   -- make sure % are visible
+#   -- 
 
 # color initialization
 class Colors256:
@@ -60,6 +63,11 @@ class Frame:
         if self.title == title:
             return self.samples
         return sum([f.samples_with_title(title) for f in self.children])
+
+    def search_with_title(self, title):
+        if title in self.title:
+            return self.samples
+        return sum([f.search_with_title(title) for f in self.children])
 
     # returns all topline frames matching title
     # once we encounter a match we do not go deeper
@@ -123,6 +131,9 @@ class MultiFrameView(FrameView):
     def matches_title(self, title):
         return sum([f.samples_with_title(title) for f in self.frames]) > 0
 
+    def search_title(self, title):
+        return sum([f.search_with_title(title) for f in self.frames]) > 0
+
 # representation of a frame on a screen, with specific location/size
 class SingleFrameView(FrameView):
     def __init__(self, x, y, w, frame):
@@ -151,8 +162,12 @@ class SingleFrameView(FrameView):
     def matches(self, frames):
         return self.frames[0] in frames
 
+    # TODO: is this correct? what if children match?
     def matches_title(self, title):
         return self.frames[0].title == title
+
+    def search_title(self, title):
+        return title in self.frames[0].title
 
 def view_contains(view, x, y):
     return view.y == y and x >= view.x and x < view.x + view.w
@@ -568,6 +583,25 @@ class FlameCLI:
         self.multiselect_samples = self.frames.samples_with_title(title)
         self.render()
 
+    def search(self):
+        rows, cols = self.stdscr.getmaxyx()
+        for i in range(self.status_area.old_lines):
+            self.stdscr.addstr(rows - 1 - i, 0, " " * (cols - 1))
+        self.stdscr.addstr(rows - 1, 0, "/")
+        curses.echo()
+        term = self.stdscr.getstr(rows - 1, 1)
+        curses.noecho()
+
+        # search looks for partial match? 
+        # TODO: what if the 'matched' part is part of multiselect?
+        # we can make 'highlight by name'
+        # do we search within visible part only?
+        for (i, v) in enumerate(self.frame_views):
+            if v.search_title(term):
+                if self.change_selection(i):
+                    self.stdscr.refresh()
+                break
+
     def hard_focus(self):
         if not self.frame_views:
             return
@@ -577,7 +611,7 @@ class FlameCLI:
         self.frames.hard_focus(frames[0].title)
         self.rebuild_views()
         self.render()
-
+    
     def loop(self):
         while True:
             c = self.stdscr.getch()
@@ -616,6 +650,9 @@ class FlameCLI:
                 continue
             if c == ord('q'):
                 break
+            if c == ord('/'):
+                self.search()
+                continue
             if c == curses.KEY_MOUSE:
                 (_, mx, my, _, m) = curses.getmouse()
                 if m & curses.BUTTON1_CLICKED:
