@@ -13,8 +13,12 @@ from random import randint
 # -- indicate truncated frames (above and below)
 # -- shortcuts like 'perf report'
 # -- navigation within selection ('n' - next selection)
-# -- refactor a little
-#   -- views are effectively immutable.
+#   -- how is it supposed to work for multiselect views?
+#   -- do we have 'selection' on frame level or view level?
+#   -- selection can refer to both:
+#    -- single frame, single view
+#    -- single frame, part of view
+#    -- multiple frame
 # -- shall invert keep selection? exclusion? focus?
 # -- handle long frame titles better
 #   -- make sure % are visible
@@ -78,10 +82,13 @@ class Frame:
 
 # representation of a frame on a screen, with specific location/size
 class FrameView(object):
-    def __init__(self, x, y, w, frames):
+    def __init__(self, x, y, w, frames, truncated = False):
         self.x = x
         self.y = y
         self.w = w
+        # truncated indicates that this frame might have children which are
+        # hidden due to small size on the screen
+        self.truncated = truncated
         # sort by samples desc.
         self.frames = sorted(frames, key=lambda f: - f.samples)
         self.samples = sum([f.samples for f in frames])
@@ -101,12 +108,22 @@ class FrameView(object):
     def frame_count(self):
         return len(self.frames)
 
+    def matches_title(self, title):
+        if self.truncated:
+            return sum([f.samples_with_title(title) for f in self.frames]) > 0
+        return any(f.title == title for f in self.frames)
+
+    def search_title(self, title):
+        if self.truncated:
+            return sum([f.search_with_title(title) for f in self.frames]) > 0
+        return any(title in f.title for f in self.frames)
+
 # compressed multiframe view for presenting multiple frames in a single cell
 # we need that in TUI version as some stacks would be < 1 character otherwise
 class MultiFrameView(FrameView):
     def __init__(self, x, y, w, frames):
         assert(w > 0)
-        super(MultiFrameView, self).__init__(x, y, w, frames)
+        super(MultiFrameView, self).__init__(x, y, w, frames, truncated=True)
         self.txt = "+" if w == 1 else "[{}]".format("+" * (w - 2))
 
     # render summary of the multiframe
@@ -128,16 +145,11 @@ class MultiFrameView(FrameView):
     def matches(self, frames):
         return False
 
-    def matches_title(self, title):
-        return sum([f.samples_with_title(title) for f in self.frames]) > 0
-
-    def search_title(self, title):
-        return sum([f.search_with_title(title) for f in self.frames]) > 0
 
 # representation of a frame on a screen, with specific location/size
 class SingleFrameView(FrameView):
-    def __init__(self, x, y, w, frame):
-        super(SingleFrameView, self).__init__(x, y, w, [frame])
+    def __init__(self, x, y, w, frame, truncated=False):
+        super(SingleFrameView, self).__init__(x, y, w, [frame], truncated)
         if w == 1:
             self.txt = '-'
         else:
@@ -161,13 +173,6 @@ class SingleFrameView(FrameView):
 
     def matches(self, frames):
         return self.frames[0] in frames
-
-    # TODO: is this correct? what if children match?
-    def matches_title(self, title):
-        return self.frames[0].title == title
-
-    def search_title(self, title):
-        return title in self.frames[0].title
 
 def view_contains(view, x, y):
     return view.y == y and x >= view.x and x < view.x + view.w
@@ -296,7 +301,7 @@ class FrameSet:
             if len(leftovers) > 1:
                 res.append(MultiFrameView(x, y, w, leftovers))
             else:
-                res.append(SingleFrameView(x, y, w, leftovers[0]))
+                res.append(SingleFrameView(x, y, w, leftovers[0], truncated=True))
         return res
 
     # This method prepares blocks from a subset of frame set,
@@ -462,6 +467,8 @@ class FlameCLI:
             self.frame_views[i].draw(self.stdscr, i == self.selection, i in self.multiselect)
         self.print_status_bar()
 
+    # selects a frame view.
+    # Automatically deselects and dehighlights old selection
     def change_selection(self, s):
         if s is None:
             return False
