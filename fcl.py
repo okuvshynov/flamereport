@@ -8,9 +8,6 @@ from random import randint
 # next things to do:
 
 # -- support ? and show help window
-# -- support search with /
-# -- consolidate visual representation
-# -- indicate truncated frames (above and below)
 # -- shortcuts like 'perf report'
 # -- navigation within selection ('n' - next selection)
 #   -- how is it supposed to work for multiselect views?
@@ -48,7 +45,7 @@ class Colors256:
         return Colors256.color_count + 1
 
     @staticmethod
-    def match_color():
+    def highlight_color():
         return Colors256.color_count + 2
 
 # Frame represents stack frame itself, not its representation on the scren
@@ -94,12 +91,12 @@ class FrameView(object):
         self.samples = sum([f.samples for f in frames])
         self.color = Colors256.pick_color()
 
-    def draw(self, scr, selected, matched):
+    def draw(self, scr, selected, highlight):
         style = curses.color_pair(self.color)
         if selected:
             style = curses.color_pair(Colors256.selection_color())
-        elif matched:
-            style = curses.color_pair(Colors256.match_color())
+        elif highlight:
+            style = curses.color_pair(Colors256.highlight_color())
         scr.addstr(self.y, self.x, self.txt, style)
 
     def frameset(self):
@@ -127,9 +124,8 @@ class MultiFrameView(FrameView):
         self.txt = "+" if w == 1 else "[{}]".format("+" * (w - 2))
 
     # render summary of the multiframe
+    # multiselect samples is ignored for now
     def status(self, total, height, multiselect_samples = None):
-        # multiframe can not be 'selected' with *
-        assert(multiselect_samples == None)
         assert(self.frame_count() > 1)
         if height < 1:
             return []
@@ -241,7 +237,7 @@ class FrameSet:
         return res
 
     # pick all frames by title (e.g. malloc) and show all their children
-    # pim them to the top regardless of where are they in the original 
+    # pin them to the top regardless of where are they in the original 
     # frame set. useful to see 'who calls function X'
     def hard_focus(self, title):
         frames = list(chain.from_iterable([f.all_by_title(title) for f in self.frames]))
@@ -366,19 +362,30 @@ class FlameCLI:
         self.build()
         self.render()
 
-    # rebuilding all views, while keeping selection
-    def rebuild_views(self):
-        self.multiselect = []
-        selected_frames = self.frame_views[self.selection].frameset()
+    def selected_view(self):
+        return self.frame_views[self.highlight[self.selection]]
+
+    def selected_frames(self):
+        if self.highlight:
+            return self.frame_views[self.highlight[self.selection]].frameset()
+        return None
+
+    # rebuilding all views, while keeping selected frames selected
+    def rebuild_views(self, selected_frames = None):
+        if not self.frames:
+            return
+        if selected_frames is None:
+            selected_frames = self.selected_frames()
+        self.highlight = []
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1], self.focus, self.pinned)
         self.fit_into_vertical_space()
-        self.selection = 0
+        selection = 0
         for (i, view) in enumerate(self.frame_views):
             if view.matches(selected_frames):
-                self.selection = i
+                selection = i
                 break
         self.build_screen_index()
-        self.highlight_same()
+        self.do_highlight(selection)
 
     def clear_focus(self):
         self.focus = None
@@ -387,9 +394,6 @@ class FlameCLI:
         self.render()
 
     def build(self, inverted=False):
-        # index of a view currently under cursor
-        # TODO: store view itself, not index
-        self.selection = 0
         # list of frames on the same level with the same parent
         # this list would be expanded to 100% width, their parents would too
         self.focus = None
@@ -403,18 +407,16 @@ class FlameCLI:
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
         self.fit_into_vertical_space()
         self.build_screen_index()
-        self.multiselect = []
+        self.do_highlight(0)
         self.render()
 
     def set_focus(self):
-        if not self.selection:
-            return
-        self.focus = self.frame_views[self.selection].frameset()
+        self.focus = self.selected_frames()
         self.rebuild_views()
         self.render()
 
     def set_pin(self):
-        self.focus = self.frame_views[self.selection].frameset()
+        self.focus = self.selected_frames()
         self.pinned = self.focus
         self.rebuild_views()
         self.render()
@@ -448,9 +450,8 @@ class FlameCLI:
         if not self.frame_views:
             status = []
         else:
-            view = self.frame_views[self.selection]
-            multi = self.multiselect_samples if self.multiselect else None
-            status = view.status(samples + excluded, self.status_height, multi)
+            view = self.selected_view()
+            status = view.status(samples + excluded, self.status_height, self.multiselect_samples)
         warning = None
         w = []
         if excluded > 0:
@@ -464,7 +465,9 @@ class FlameCLI:
     def render(self): 
         self.stdscr.clear()
         for (i, _) in enumerate(self.frame_views):
-            self.frame_views[i].draw(self.stdscr, i == self.selection, i in self.multiselect)
+            is_selected = (i == self.highlight[self.selection])
+            is_highlighted = (i in self.highlight)
+            self.frame_views[i].draw(self.stdscr, is_selected, is_highlighted)
         self.print_status_bar()
 
     # selects a frame view.
@@ -472,13 +475,9 @@ class FlameCLI:
     def change_selection(self, s):
         if s is None:
             return False
-        for i in self.multiselect:
+        for i in self.highlight:
             self.frame_views[i].draw(self.stdscr, False, False)
-        self.multiselect = []
-        self.frame_views[self.selection].draw(self.stdscr, False, False)
-        self.selection = s
-        self.frame_views[self.selection].draw(self.stdscr, True, False)
-        self.highlight_same()
+        self.do_highlight(s)
         self.print_status_bar()
         return True
 
@@ -486,15 +485,16 @@ class FlameCLI:
         if not self.frame_views:
             return
         m = len(self.frame_views)
-        if self.change_selection(((self.selection + d) % m + m) % m):
+        selection = self.highlight[self.selection]
+        if self.change_selection(((selection + d) % m + m) % m):
             self.stdscr.refresh()
 
     def select_up(self):
-        if self.change_selection(self.frame_views[self.selection].parent_index):
+        if self.change_selection(self.selected_view().parent_index):
             self.stdscr.refresh()
 
     def select_down(self):
-        if self.change_selection(self.frame_views[self.selection].first_child_index):
+        if self.change_selection(self.selected_view().first_child_index):
             self.stdscr.refresh()
 
     # returns a tuple (characters for chart, characters for status)
@@ -543,11 +543,13 @@ class FlameCLI:
     def exclude_frame(self):
         if not self.frame_views:
             return
-        to_exclude = self.frame_views[self.selection].frameset()
+        to_exclude = self.selected_frames()
         self.frames.exclude_frames(to_exclude)
-        self.selection = 0
+        
         # everything is removed
         if self.frames.total_samples == 0:
+            self.selection = 0
+            self.highlight = []
             self.focus = None
             self.pinned = None
             self.rebuild_views()
@@ -558,38 +560,36 @@ class FlameCLI:
         self.focus = self._find_nonempty_parent(self.focus)
 
         # pick selection
-        new_selection = self._find_nonempty_parent([to_exclude[0].parent])
+        selected_frames = self._find_nonempty_parent([to_exclude[0].parent])
 
         # pick pinned 
         self.pinned = self._find_nonempty_parent(self.pinned)
 
-        self.rebuild_views()
-
-        if new_selection is not None:
-            for (i, v) in enumerate(self.frame_views):
-                if v.matches(new_selection):
-                    self.selection = i
-                    break
+        self.rebuild_views(selected_frames)
 
         self.render()
 
-    # selects all frames with current selection title.
-    # works only if selection is single-frame, 
-    # in case of multiframe view is a no-op
-    def highlight_same(self):
-        self.multiselect = []
+    def do_highlight(self, selection):
+        self.highlight = []
         if len(self.frame_views) == 0:
             return
-        frames = self.frame_views[self.selection].frameset()
+        view = self.frame_views[selection]
+        frames = view.frameset()
         if len(frames) != 1:
-            return
-        title = frames[0].title
-        for (i, v) in enumerate(self.frame_views):
-            if v.matches_title(title):
-                self.multiselect.append(i)
-        self.multiselect_samples = self.frames.samples_with_title(title)
+            self.highlight = [selection]
+            self.selection = 0
+            self.multiselect_samples = None
+        else:
+            title = frames[0].title
+            for (i, v) in enumerate(self.frame_views):
+                if v.matches_title(title):
+                    self.highlight.append(i)
+                if v == view:
+                    self.selection = len(self.highlight) - 1
+            self.multiselect_samples = self.frames.samples_with_title(title)
         self.render()
 
+    # '/'
     def search(self):
         rows, cols = self.stdscr.getmaxyx()
         for i in range(self.status_area.old_lines):
@@ -609,15 +609,31 @@ class FlameCLI:
                     self.stdscr.refresh()
                 break
 
+    # 'F'
     def hard_focus(self):
         if not self.frame_views:
             return
-        frames = self.frame_views[self.selection].frameset()
+        frames = self.selected_frames()
         if len(frames) != 1:
             return
         self.frames.hard_focus(frames[0].title)
-        self.rebuild_views()
+        self.focus = None
+        self.pin = None
+        self.rebuild_views(frames)
         self.render()
+
+    # 'n'
+    def next_highlight(self):
+        if self.highlight:
+            self.selection = (self.selection + 1) % len(self.highlight)
+            self.render()
+
+    # 'N'
+    def prev_highlight(self):
+        if self.highlight:
+            n = len(self.highlight)
+            self.selection = (self.selection + n - 1) % n
+            self.render()
     
     def loop(self):
         while True:
@@ -659,6 +675,12 @@ class FlameCLI:
                 break
             if c == ord('/'):
                 self.search()
+                continue
+            if c == ord('n'):
+                self.next_highlight()
+                continue
+            if c == ord('N'):
+                self.prev_highlight()
                 continue
             if c == curses.KEY_MOUSE:
                 (_, mx, my, _, m) = curses.getmouse()
