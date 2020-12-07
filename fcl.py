@@ -4,9 +4,9 @@ import sys
 from itertools import groupby, tee, chain
 from operator import attrgetter, itemgetter
 from random import randint
-####
-# next things to do:
 
+################################
+# next things to do:
 # -- support ? and show help window
 # -- shortcuts like 'perf report'
 # -- navigation within selection ('n' - next selection)
@@ -19,7 +19,37 @@ from random import randint
 # -- shall invert keep selection? exclusion? focus?
 # -- handle long frame titles better
 #   -- make sure % are visible
-#   -- 
+
+#############################
+# types of frame views
+# 
+# Frame view is a 'box' on a screen representing one or more frames.
+# 
+# There are several types of frame views.
+#  - Single - only one frame is represented in this view. Such views might be 
+#    truncated, where children are not shown due to width or expanded.
+#  - Multi - are aggregated views with several frames. They are always truncated
+
+#############################
+# multiselect/highlight
+# 
+# When there's at least one frame present in the data, at any moment of time, 
+# at least one frame view is 'selected' and 0 or more 'highlighted'.
+# Selection happens/changes as a result of the following actions:
+#  - mouse click. View clicked gets selected.
+#  - selection navigation (left/right/up/down/g/h/j/l)
+#  - navigation within the highlight (n/N). 
+#  - exclude action
+#  - search ('/').
+# After selection happened, a set of frames might get 'highlight'. 
+# The rules for that are:
+#  - If selection was done manually on multi-frame view we do not highlight anything
+#  - If selection was done manually on single-frame view, we do highlight title matching views. 
+#    Title match resolution works like this:
+#      - if view contains a frame matching title, highlight it.
+#      - if a view is truncated, look for a match in all children recursively.
+#      - if view is not truncated, do not highlight it, but consider all children
+#  - If selection was a result of a search action, we highlight all matching frames
 
 # color initialization
 class Colors256:
@@ -153,8 +183,6 @@ class SingleFrameView(FrameView):
             self.txt = '[{}]'.format(frame.title[:w].ljust(w, '-'))
 
     # single frame view might get multiselection
-    # status here is also 'immutable' until we rebuild the views
-    # except, we don't know the height until we prepare all the views
     def status(self, total, height, multiselect_samples = None):
         assert(len(self.frames) == 1)
         if height < 1:
