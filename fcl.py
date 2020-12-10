@@ -9,14 +9,10 @@ from random import randint
 # next things to do:
 # -- support ? and show help window
 # -- shortcuts like 'perf report'
-# -- navigation within selection ('n' - next selection)
-#   -- how is it supposed to work for multiselect views?
-#   -- do we have 'selection' on frame level or view level?
-#   -- selection can refer to both:
-#    -- single frame, single view
-#    -- single frame, part of view
-#    -- multiple frame
 # -- shall invert keep selection? exclusion? focus?
+# -- search 
+#   - search for partial match?
+#   - ESC / backspace to exit search prompt
 # -- handle long frame titles better
 #   -- make sure % are visible
 
@@ -171,8 +167,6 @@ class MultiFrameView(FrameView):
     def matches(self, frames):
         return False
 
-
-# representation of a frame on a screen, with specific location/size
 class SingleFrameView(FrameView):
     def __init__(self, x, y, w, frame, truncated=False):
         super(SingleFrameView, self).__init__(x, y, w, [frame], truncated)
@@ -554,7 +548,6 @@ class FlameCLI:
         (graph, status) = self._allocate_vertical_space(self.frame_views)
         self.status_height = status
         self.frame_views = [v for v in self.frame_views if v.y < graph]
-        # TODO: also modify last row if there were stacks below it?
 
     # returns first non-empty frameset in a hierarchy
     def _find_nonempty_parent(self, frameset):
@@ -624,7 +617,7 @@ class FlameCLI:
             self.stdscr.addstr(rows - 1 - i, 0, " " * (cols - 1))
         self.stdscr.addstr(rows - 1, 0, "/")
         curses.echo()
-        term = self.stdscr.getstr(rows - 1, 1)
+        term = self.stdscr.getstr(rows - 1, 1).decode(encoding="utf-8")
         curses.noecho()
 
         # search looks for partial match? 
