@@ -9,12 +9,15 @@ from random import randint
 # next things to do:
 # -- support ? and show help window
 # -- shortcuts like 'perf report'
-# -- shall invert keep selection? exclusion? focus?
 # -- search 
-#   - search for partial match?
 #   - ESC / backspace to exit search prompt
 # -- handle long frame titles better
 #   -- make sure % are visible
+# -- comparison view
+#   -- how could it look? One option is to show +/- with some extra color. 
+#   -- another option is to grow in two directions: + up - down.
+# -- reintroduce invert
+# -- icicle/flame switch
 
 #############################
 # types of frame views
@@ -212,10 +215,8 @@ def read_stdin():
 
 # set of all frames.
 class FrameSet:
-    def __init__(self, data, inverted=False):
+    def __init__(self, data):
         # this is a list of top-level frames
-        if inverted:
-            data = [(list(reversed(f)), s) for (f, s) in data]
         self.frames = self._build_frames(data)
         self.total_samples = sum([a for (_, a) in data])
         self.total_excluded = 0
@@ -415,7 +416,7 @@ class FlameCLI:
         self.rebuild_views()
         self.render()
 
-    def build(self, inverted=False):
+    def build(self):
         # list of frames on the same level with the same parent
         # this list would be expanded to 100% width, their parents would too
         self.focus = None
@@ -423,9 +424,7 @@ class FlameCLI:
         # new 'root level'
         self.pinned = None
 
-        self.inverted = inverted
-
-        self.frames = FrameSet(self.data, inverted=inverted)
+        self.frames = FrameSet(self.data)
         self.frame_views = self.frames.get_frame_views(self.stdscr.getmaxyx()[1])        
         self.fit_into_vertical_space()
         self.build_screen_index()
@@ -479,8 +478,6 @@ class FlameCLI:
         if excluded > 0:
             pe = 100.0 * excluded / (samples + excluded)
             w.append("{:.2f}% samples excluded".format(pe))
-        if self.inverted:
-            w.append("Inverted") 
         warning = "|".join(w)
         self.status_area.draw(status, warning)
 
@@ -688,9 +685,6 @@ class FlameCLI:
                 continue
             if c == ord('x'):
                 self.exclude_frame()
-                continue
-            if c == ord('I'):
-                self.build(inverted=not self.inverted)
                 continue
             if c == ord('q'):
                 break
