@@ -1,6 +1,6 @@
 # Flame Graphs for terminal
 
-![Example](/samples/osx_dtrace_sample.png)
+![Example](/samples/sqlite_sample.png)
 
 This is an implementation of [flame graphs](http://www.brendangregg.com/flamegraphs.html) that shows the chart right in the terminal.
 
@@ -69,19 +69,29 @@ Please check http://www.brendangregg.com/flamegraphs.html
 * R - hard reset, brings everything to default view; Useful after exclusions.
 * single mouse click - select the block
 * double mouse click - zoom into the block. Equivalent to 'f'
-* / - search. Works are exact match at the moment
+* / - search
 * n/N - select next/prev block within the highlighted set of views
 * q - quit
 
 ## Output description
-Note - this is likely to change.
 
-![Example](/samples/osx_dtrace_sample_notes.png)
+Simple selection with auto-highlight matching frames
+
+![Example](/samples/sqlite_selection.png)
+
+Selecting a cell with multiple frames in it. Pressing 'n' on previous example would bring us here:
+
+![Example](/samples/sqlite_multiselect.png)
+
+In case 'x' was used to hide some of the less interesting frames, status will show how much was excluded:
+
+![Example](/samples/sqlite_exclusion.png)
+
 
 Graph element examples
 * '[foo---]' -- individual frame. 
 * '-' - also individual frame. 
-* '+' - aggregated frame view which contains several (likely small) frames. Selecting it will show the details in the status area. Might have hidden descendents. 
+* '+' - aggregated frame view which contains several frames. Selecting it will show the details in the status area. Might have hidden descendents. 
 
 ## Known limitations
 * No color-coding for parts of stack traces (kernel/userspace/vm/native/etc.)
