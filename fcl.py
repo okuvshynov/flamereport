@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import curses
 import os
 import sys
