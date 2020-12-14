@@ -10,6 +10,8 @@ While not as powerful as GUI tools, it's more convenient in case of iterative pr
 3. make changes in code/workload/app-level settings/profiling settings/...
 4. repeat
 
+In specific case of Linux perf flamereport can be seen as an alternative to running 'perf report'.
+
 ## Flame graphs overview
 Please check http://www.brendangregg.com/flamegraphs.html
 
