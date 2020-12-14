@@ -17,7 +17,7 @@ Please check http://www.brendangregg.com/flamegraphs.html
 
 ### With provided sample
 
-```$ python fcl.py < samples/osx_dtrace```
+```$ python flame.py < samples/osx_dtrace```
 
 ### reproducing provided sample on Mac OS
 
@@ -35,7 +35,7 @@ Please check http://www.brendangregg.com/flamegraphs.html
 
 4. Run:
 
-```$ python ./flametui/fcl.py < stacks```
+```$ python ./flametui/flame.py < stacks```
 
 ### With Linux perf
 
@@ -53,7 +53,7 @@ Please check http://www.brendangregg.com/flamegraphs.html
 
 4. View visualization
 
-```$ python ./flametui/fcl.py < ./stacks```
+```$ python ./flametui/flame.py < ./stacks```
 
 
 ## Interactive commands

@@ -1,1 +1,1 @@
-perf script | stackcollapse-perf.pl | fcl.py
+perf script | stackcollapse-perf.pl | flame.py
