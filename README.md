@@ -2,9 +2,11 @@
 
 ![Example](/samples/sqlite_sample.png)
 
-This is an implementation of [flame graphs](http://www.brendangregg.com/flamegraphs.html) that shows the chart right in the terminal.
+This is an implementation of flame graphs right in the terminal.
 
-While not as powerful as GUI tools, it's more convenient in case of iterative process, like:
+For an overview of flame graphs and original implementation, check [Brendan Gregg's website](http://www.brendangregg.com/flamegraphs.html) 
+
+While not as powerful as GUI tools, having chart right in the terminal is more convenient in case of iterative process, like:
 1. run a profile on remote machine
 2. visualize and study the profile
 3. make changes in code/workload/app-level settings/profiling settings/...
